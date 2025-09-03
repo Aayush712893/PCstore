@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+
+{% block title %}Preview Build - Your PC{% endblock %}
+
+{% block content %}
+<h1>🖥️ Preview Your PC Build</h1>
+
+{% if my_build %}
+    <table border="1" cellspacing="0" cellpadding="10" style="margin:auto; text-align:left;">
+        <tr><th>Component</th><th>Selection</th></tr>
+        <tr><td>Brand</td><td>{{ my_build.brand }}</td></tr>
+        <tr><td>Processor</td><td>{{ my_build.processor }}</td></tr>
+        <tr><td>Motherboard</td><td>{{ my_build.motherboard }}</td></tr>
+        <tr><td>RAM</td><td>{{ my_build.ram }}</td></tr>
+        <tr><td>SSD</td><td>{{ my_build.ssd }}</td></tr>
+        <tr><td>Graphics Card</td><td>{{ my_build.gpu }}</td></tr>
+        <tr><td>PSU</td><td>{{ my_build.psu }}</td></tr>
+        <tr><td>Cooling Fans</td><td>{{ my_build.cooling }}</td></tr>
+        <tr><td>AIO</td><td>{{ my_build.aio }}</td></tr>
+    </table>
+{% else %}
+    <p>No build selected yet. <a href="/build">Create one here</a>.</p>
+{% endif %}
+{% endblock %}

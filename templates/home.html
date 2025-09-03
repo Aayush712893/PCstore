@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+
+{% block title %}Home - Your PC{% endblock %}
+
+{% block content %}
+<!-- Welcome Section -->
+<section style="text-align:center; padding:50px 20px; font-family:Impact, sans-serif;">
+    <h1 style="font-size:48px; margin-bottom:20px;">Welcome to Your PC</h1>
+    <a href="/build" 
+       style="background:#007bff; color:white; padding:15px 30px; text-decoration:none; font-size:20px; border-radius:8px;">
+       Start a Build
+    </a>
+</section>
+
+<!-- Prebuilt PCs Section -->
+<section style="padding:20px;">
+    <h2 style="text-align:center; font-family:'Bahnschrift SemiBold', sans-serif; font-size:32px; margin-bottom:30px;">
+        Prebuilt PCs
+    </h2>
+    <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(250px, 1fr)); gap:20px;">
+        {% for pc in prebuilds %}
+        <div class="pc-card" onclick="window.location.href='/store'">
+            <img src="{{ url_for('static', filename=pc.image) }}" alt="{{ pc.name }}">
+            <h3>{{ pc.name }}</h3>
+            <p>₹{{ pc.price }}</p>
+        </div>
+        {% endfor %}
+    </div>
+</section>
+
+<style>
+.pc-card {
+    border: 1px solid #ccc;
+    border-radius: 10px;
+    padding: 15px;
+    text-align: center;
+    cursor: pointer;
+    transition: transform 0.3s, box-shadow 0.3s;
+}
+.pc-card img {
+    width: 100%;
+    height: 200px;
+    object-fit: cover;
+    border-radius: 8px;
+}
+.pc-card h3 {
+    font-family: 'Bahnschrift SemiBold', sans-serif;
+    margin: 15px 0;
+}
+.pc-card p {
+    font-size: 18px;
+    font-weight: bold;
+    color: #007bff;
+}
+.pc-card:hover {
+    transform: translateY(-8px);
+    box-shadow: 0 8px 20px rgba(0,0,0,0.2);
+}
+</style>
+{% endblock %}

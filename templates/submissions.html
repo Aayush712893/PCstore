@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+
+{% block title %}All Submitted Builds - Your PC{% endblock %}
+
+{% block content %}
+<h1>🗂️ Submitted Builds</h1>
+
+{% if builds %}
+<table border="1" cellpadding="10" cellspacing="0" style="margin:auto; text-align:left;">
+    <tr>
+        <th>ID</th>
+        <th>Brand</th>
+        <th>Processor</th>
+        <th>Motherboard</th>
+        <th>RAM</th>
+        <th>SSD</th>
+        <th>GPU</th>
+        <th>PSU</th>
+        <th>Cooling</th>
+        <th>AIO</th>
+    </tr>
+    {% for build in builds %}
+    <tr>
+        <td>{{ build[0] }}</td>
+        <td>{{ build[1] }}</td>
+        <td>{{ build[2] }}</td>
+        <td>{{ build[3] }}</td>
+        <td>{{ build[4] }}</td>
+        <td>{{ build[5] }}</td>
+        <td>{{ build[6] }}</td>
+        <td>{{ build[7] }}</td>
+        <td>{{ build[8] }}</td>
+        <td>{{ build[9] }}</td>
+    </tr>
+    {% endfor %}
+</table>
+{% else %}
+<p>No builds have been submitted yet.</p>
+{% endif %}
+{% endblock %}

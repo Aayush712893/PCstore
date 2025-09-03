@@ -1,0 +1,213 @@
+/* Navbar layout */
+.navbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background: #1a1a1a;
+    padding: 15px 30px;
+    box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+    color: white;
+    font-family: Impact, Haettenschweiler, "Arial Narrow Bold", sans-serif;
+}
+
+/* Left: Brand */
+.nav-left .brand {
+    font-size: 26px;   /* Bigger */
+    font-weight: bold;
+    color: #ffcc00;
+}
+
+/* Center nav links */
+.nav-center {
+    flex: 1;
+    text-align: center;
+}
+
+.nav-center a {
+    color: white;
+    text-decoration: none;
+    margin: 0 20px;
+    font-size: 20px;
+    font-family: Impact, Haettenschweiler, "Arial Narrow Bold", sans-serif;
+    transition: color 0.3s ease;
+}
+
+.nav-center a:hover {
+    color: #ffcc00;
+}
+
+/* Right: Login */
+.nav-right a {
+    color: white;
+    text-decoration: none;
+    font-size: 20px;  /* Bigger */
+    font-weight: bold;
+    transition: color 0.3s ease;
+}
+
+.nav-right a:hover {
+    color: #ffcc00;
+}
+
+/* Hero Section */
+.hero {
+    text-align: center;
+    padding: 80px 20px;
+    background: linear-gradient(135deg, #1a1a1a, #333);
+    color: white;
+    font-family: Impact, Haettenschweiler, "Arial Narrow Bold", sans-serif;
+}
+
+.hero h1 {
+    font-size: 50px;
+    margin-bottom: 20px;
+}
+
+.hero p {
+    font-size: 20px;
+    margin-bottom: 30px;
+}
+
+.btn-large {
+    font-size: 20px;
+    padding: 15px 30px;
+    border-radius: 8px;
+    background: #ffcc00;
+    border: none;
+    cursor: pointer;
+    transition: 0.3s;
+}
+
+.btn-large:hover {
+    background: white;
+    color: #1a1a1a;
+}
+
+/* Prebuilds Section */
+.prebuilds {
+    padding: 50px 20px;
+    text-align: center;
+}
+
+.prebuilds h2 {
+    font-size: 32px;
+    margin-bottom: 40px;
+    font-family: Impact, Haettenschweiler, "Arial Narrow Bold", sans-serif;
+}
+
+.prebuild-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+    gap: 25px;
+}
+
+.prebuild-card {
+    background: white;
+    padding: 20px;
+    border-radius: 12px;
+    box-shadow: 0 4px 10px rgba(0,0,0,0.1);
+    transition: transform 0.3s, box-shadow 0.3s;
+    cursor: pointer;
+    text-align: left;
+}
+
+/* Product name (homepage) */
+.prebuild-card h3 {
+    margin-top: 0;
+    font-family: "Bahnschrift SemiBold", "Arial", sans-serif;
+    font-size: 22px;
+}
+
+/* Specs and details in Eras Demi ITC */
+.prebuild-card p {
+    margin: 8px 0;
+    font-family: "Eras Demi ITC", "Arial", sans-serif;
+    font-size: 16px;
+    color: #444;
+}
+
+.price {
+    font-weight: bold;
+    color: #ff6600;
+    font-size: 18px;
+    font-family: "Eras Demi ITC", "Arial", sans-serif;
+}
+
+/* Prebuilds Home Grid */
+.prebuild-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 25px;
+}
+
+.prebuild-card {
+    background: white;
+    border-radius: 12px;
+    padding: 15px;
+    text-align: center;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+    transition: transform 0.3s, box-shadow 0.3s;
+    cursor: pointer;
+}
+
+.prebuild-card img {
+    width: 100%;
+    height: 180px;
+    object-fit: cover;
+    border-radius: 8px;
+    margin-bottom: 10px;
+}
+
+.prebuild-card:hover {
+    transform: translateY(-8px);
+    box-shadow: 0 8px 20px rgba(0,0,0,0.2);
+}
+
+/* Store Page */
+.products {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 25px;
+    padding: 20px;
+}
+
+.product-card {
+    background: white;
+    border-radius: 12px;
+    padding: 20px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+}
+
+.product-card img {
+    width: 100%;
+    height: 200px;
+    object-fit: cover;
+    border-radius: 8px;
+    margin-bottom: 15px;
+}
+
+.product-card ul {
+    text-align: left;
+    margin-top: 10px;
+    padding-left: 20px;
+}
+
+/* Add to Cart button */
+.product-card button {
+    margin-top: 10px;
+    padding: 10px;
+    width: 100%;
+    background: #1a1a1a;
+    color: white;
+    border: none;
+    border-radius: 6px;
+    font-family: "Bahnschrift SemiBold", "Arial", sans-serif;
+    cursor: pointer;
+    transition: 0.3s;
+}
+
+.product-card button:hover {
+    background: #ffcc00;
+    color: #000;
+}
+

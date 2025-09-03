@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Checkout</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <h1>✅ Checkout Complete</h1>
+    <nav>
+        <a href="/">Home</a> |
+        <a href="/build">Build</a> |
+        <a href="/store">Store</a> |
+        <a href="/login">Login</a> |
+        <a href="/cart">Cart</a>
+    </nav>
+
+    <p>Thank you for your purchase! 🎉</p>
+    <p>Total Paid: <strong>₹{{ total }}</strong></p>
+
+    <p><a href="/store">Continue Shopping</a></p>
+</body>
+</html>

@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+
+{% block title %}Cart - Your PC{% endblock %}
+
+{% block content %}
+    <h1>🛒 Your Shopping Cart</h1>
+
+    {% if cart %}
+        <table border="1" cellspacing="0" cellpadding="10" style="margin: auto;">
+            <tr>
+                <th>Product</th>
+                <th>Specs</th>
+                <th>Price</th>
+                <th>Action</th>
+            </tr>
+            {% for item in cart %}
+            <tr>
+                <td>{{ item.name }}</td>
+                <td>{{ item.specs }}</td>
+                <td>₹{{ item.price }}</td>
+                <td>
+                    <a href="{{ url_for('remove_from_cart', index=loop.index0) }}">
+                        <button>Remove</button>
+                    </a>
+                </td>
+            </tr>
+            {% endfor %}
+        </table>
+
+        <p><strong>Total:</strong> ₹{{ total }}</p>
+        <a href="{{ url_for('checkout') }}"><button style="background: green;">Proceed to Checkout</button></a>
+    {% else %}
+        <p>Your cart is empty. Add some PCs from the <a href="/store">store</a>.</p>
+    {% endif %}
+{% endblock %}

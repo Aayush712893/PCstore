@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+
+{% block title %}Login - Your PC{% endblock %}
+
+{% block content %}
+<h2>Login</h2>
+
+{% if error %}
+    <p style="color:red;">{{ error }}</p>
+{% endif %}
+
+<form method="POST" action="/login" style="max-width: 400px; margin:auto;">
+    <label for="username">Username:</label><br>
+    <input type="text" id="username" name="username" required style="width:100%; padding:8px;"><br><br>
+
+    <label for="password">Password:</label><br>
+    <input type="password" id="password" name="password" required style="width:100%; padding:8px;"><br><br>
+
+    <button type="submit" style="width:100%; padding:10px;">Login</button>
+</form>
+{% endblock %}

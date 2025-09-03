@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>{% block title %}Your PC{% endblock %}</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+        }
+        header {
+            background: #222;
+            padding: 15px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            color: white;
+            font-family: Impact, sans-serif;
+        }
+        header a {
+            color: white;
+            text-decoration: none;
+            margin: 0 10px;
+            font-size: 18px;
+        }
+        header nav {
+            flex-grow: 1;
+            text-align: center;
+        }
+        main {
+            padding: 20px;
+        }
+    </style>
+</head>
+<body>
+<header>
+    <!-- Left: Website name -->
+    <div style="font-size:24px;">
+        <a href="/">Your PC</a>
+    </div>
+
+    <!-- Center: Navigation -->
+    <nav>
+        <a href="/">Home</a>
+        <a href="/build">Build</a>
+        <a href="/store">Store</a>
+        <a href="/cart">Cart</a>
+        {% if session.get("username") == "admin" %}
+            <a href="/submissions" style="color:yellow;">Submissions</a>
+        {% endif %}
+    </nav>
+
+    <!-- Right: Authentication -->
+    <div>
+        {% if session.get("logged_in") %}
+            <span>👤 {{ session.get("username") }}</span>
+            <a href="/logout">Logout</a>
+        {% else %}
+            <a href="/login">Login</a>
+            <a href="/register">Register</a>
+        {% endif %}
+    </div>
+</header>
+
+<main>
+    {% block content %}{% endblock %}
+</main>
+</body>
+</html>
