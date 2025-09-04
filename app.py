@@ -1,88 +1,154 @@
 from flask import Flask, render_template, session, redirect, url_for, request
 import sqlite3
-import hashlib
+from functools import wraps
+import json
+from werkzeug.security import generate_password_hash, check_password_hash
 
 app = Flask(__name__)
 app.secret_key = "mysecretkey"  # Needed for sessions
 
-# ✅ Helper function to save a build to SQLite
-def save_build_to_db(build):
-    print("💾 DEBUG: Connecting to database...")
-    conn = sqlite3.connect("pcstore.db")
-    c = conn.cursor()
-    # Create table if it doesn't exist
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS builds (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            brand TEXT,
-            processor TEXT,
-            motherboard TEXT,
-            ram TEXT,
-            ssd TEXT,
-            gpu TEXT,
-            psu TEXT,
-            cooling TEXT,
-            aio TEXT
-        )
-    """)
-    print("💾 DEBUG: Inserting build:", build)
-    c.execute("""
-        INSERT INTO builds (brand, processor, motherboard, ram, ssd, gpu, psu, cooling, aio)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, (
-        build["brand"], build["processor"], build["motherboard"],
-        build["ram"], build["ssd"], build["gpu"],
-        build["psu"], build["cooling"], build["aio"]
-    ))
-    conn.commit()
-    conn.close()
-    print("💾 DEBUG: Build successfully saved!")
+# ---------- DB Helpers ----------
+def get_db():
+    return sqlite3.connect("pcstore.db", timeout=10)
 
-
-# ✅ User auth helpers
-def create_users_table():
-    conn = sqlite3.connect("pcstore.db")
-    c = conn.cursor()
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT UNIQUE,
-            password TEXT
-        )
-    """)
-    conn.commit()
-    conn.close()
-
-# Call this once at startup
-create_users_table()
-
-def hash_password(password):
-    return hashlib.sha256(password.encode()).hexdigest()
-
-def register_user(username, password):
-    conn = sqlite3.connect("pcstore.db")
-    c = conn.cursor()
-    try:
-        c.execute("INSERT INTO users (username, password) VALUES (?, ?)", (username, hash_password(password)))
+def create_orders_table():
+    with sqlite3.connect("pcstore.db", timeout=10) as conn:
+        c = conn.cursor()
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS orders (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                email TEXT,
+                name TEXT,
+                address TEXT,
+                phone TEXT,
+                items_json TEXT,
+                total INTEGER
+            )
+        """)
         conn.commit()
-        return True
+
+create_orders_table()
+
+def create_tables():
+    with get_db() as conn:
+        c = conn.cursor()
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                email TEXT UNIQUE,
+                password_hash TEXT
+            )
+        """)
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS builds (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                email TEXT,
+                customer_name TEXT,   -- NEW
+                whatsapp TEXT,        -- NEW
+                comments TEXT,        -- NEW (optional)
+                brand TEXT,
+                processor TEXT,
+                motherboard TEXT,
+                ram TEXT,
+                ssd TEXT,
+                gpu TEXT,
+                psu TEXT,
+                cooling TEXT,
+                aio TEXT
+            )
+        """)
+        conn.commit()
+
+create_tables()
+
+def migrate_builds_table():
+    # add new columns if they don't exist yet
+    with get_db() as conn:
+        c = conn.cursor()
+        c.execute("PRAGMA table_info(builds);")
+        cols = {row[1] for row in c.fetchall()}  # set of column names
+
+        to_add = []
+        if "customer_name" not in cols:
+            to_add.append(("customer_name", "TEXT"))
+        if "whatsapp" not in cols:
+            to_add.append(("whatsapp", "TEXT"))
+        if "comments" not in cols:
+            to_add.append(("comments", "TEXT"))
+
+        for name, typ in to_add:
+            c.execute(f"ALTER TABLE builds ADD COLUMN {name} {typ};")
+        conn.commit()
+
+# call after create_tables()
+migrate_builds_table()
+
+def register_user(email: str, password: str) -> tuple[bool, str | None]:
+    try:
+        with get_db() as conn:
+            c = conn.cursor()
+            c.execute("INSERT INTO users (email, password_hash) VALUES (?, ?)",
+                      (email, generate_password_hash(password)))
+            conn.commit()
+        return True, None
     except sqlite3.IntegrityError:
-        return False
-    finally:
-        conn.close()
+        return False, "Email already registered."
 
-def validate_login(username, password):
-    conn = sqlite3.connect("pcstore.db")
-    c = conn.cursor()
-    c.execute("SELECT password FROM users WHERE username = ?", (username,))
-    row = c.fetchone()
-    conn.close()
-    if row and row[0] == hash_password(password):
-        return True
-    return False
+def find_user(email: str):
+    with get_db() as conn:
+        c = conn.cursor()
+        c.execute("SELECT id, email, password_hash FROM users WHERE email = ?", (email,))
+        return c.fetchone()
 
+def validate_login(email: str, password: str) -> str:
+    """
+    Returns: "ok" if credentials valid,
+             "not_found" if user doesn't exist,
+             "bad_password" if password wrong.
+    """
+    row = find_user(email)
+    if not row:
+        return "not_found"
+    _, _, pw_hash = row
+    return "ok" if check_password_hash(pw_hash, password) else "bad_password"
 
-# ---- Prebuild PC list (unchanged) ----
+def save_build_to_db(build: dict, email: str):
+    with get_db() as conn:
+        c = conn.cursor()
+        c.execute("""
+            INSERT INTO builds (
+                email, customer_name, whatsapp, comments,
+                brand, processor, motherboard, ram, ssd, gpu, psu, cooling, aio
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            email,
+            build.get("customer_name"),
+            build.get("whatsapp"),
+            build.get("comments"),
+            build.get("brand"),
+            build.get("processor"),
+            build.get("motherboard"),
+            build.get("ram"),
+            build.get("ssd"),
+            build.get("gpu"),
+            build.get("psu"),
+            build.get("cooling"),
+            build.get("aio"),
+        ))
+        conn.commit()
+
+# ---------- Auth Guard ----------
+def login_required(view_func):
+    @wraps(view_func)
+    def wrapper(*args, **kwargs):
+        if not session.get("logged_in"):
+            # Not logged in: send them to login page
+            return redirect(url_for("login", next=request.path))
+        return view_func(*args, **kwargs)
+    return wrapper
+
+# ---------- Sample Data ----------
 prebuilds = [
     {
         "id": 1,
@@ -141,16 +207,22 @@ prebuilds = [
     }
 ]
 
-
-# ---- Routes ----
+# ---------- Routes ----------
 @app.route("/")
 def home():
     return render_template("home.html", prebuilds=prebuilds)
 
+# Anyone can view the build page, but submitting requires login
 @app.route("/build", methods=["GET", "POST"])
 def build():
     if request.method == "POST":
+        if not session.get("logged_in"):
+            return redirect(url_for("login", next=url_for("build")))
+
         session["my_build"] = {
+            "customer_name": request.form.get("customer_name", "").strip(),
+            "whatsapp": request.form.get("whatsapp", "").strip(),
+            "comments": request.form.get("comments", "").strip(),
             "brand": request.form.get("brand"),
             "processor": request.form.get("processor"),
             "motherboard": request.form.get("motherboard"),
@@ -161,26 +233,32 @@ def build():
             "cooling": request.form.get("cooling"),
             "aio": request.form.get("aio"),
         }
-        print("✅ DEBUG: Build received:", session["my_build"])
 
-        # Save to database
-        save_build_to_db(session["my_build"])
-        print("✅ DEBUG: Build saved to database!")
+        # ✅ Optional minimal check for WhatsApp number
+        wa = session["my_build"]["whatsapp"]
+        if not wa or not wa.replace("+", "").replace(" ", "").isdigit():
+            error = "Please enter a valid WhatsApp number."
+            return render_template("build.html", error=error)
 
+        # Save with the logged-in email
+        save_build_to_db(session["my_build"], session["email"])
         return redirect(url_for("preview_build"))
 
     return render_template("build.html")
 
 @app.route("/preview_build")
+@login_required
 def preview_build():
     my_build = session.get("my_build", None)
     return render_template("preview_build.html", my_build=my_build)
 
 @app.route("/store")
 def store():
+    # store is visible without login
     return render_template("store.html", prebuilds=prebuilds)
 
 @app.route("/add_to_cart/<int:pc_id>")
+@login_required
 def add_to_cart(pc_id):
     cart = session.get("cart", [])
     for pc in prebuilds:
@@ -188,9 +266,32 @@ def add_to_cart(pc_id):
             cart.append(pc)
             break
     session["cart"] = cart
-    return redirect(url_for("cart"))
+    # 👉 go collect shipping details next
+    return redirect(url_for("shipping"))
+
+@app.route("/shipping", methods=["GET", "POST"])
+@login_required
+def shipping():
+    if not session.get("cart"):
+        # If cart is empty, send user to store first
+        return redirect(url_for("store"))
+
+    error = None
+    if request.method == "POST":
+        name = request.form.get("name", "").strip()
+        address = request.form.get("address", "").strip()
+        phone = request.form.get("phone", "").strip()
+
+        if not name or not address or not phone:
+            error = "Please fill out all fields."
+        else:
+            session["shipping"] = {"name": name, "address": address, "phone": phone}
+            return redirect(url_for("checkout"))
+
+    return render_template("shipping.html", error=error)
 
 @app.route("/remove_from_cart/<int:index>")
+@login_required
 def remove_from_cart(index):
     cart = session.get("cart", [])
     if 0 <= index < len(cart):
@@ -199,66 +300,106 @@ def remove_from_cart(index):
     return redirect(url_for("cart"))
 
 @app.route("/cart")
+@login_required
 def cart():
     cart = session.get("cart", [])
     total = sum(item["price"] for item in cart)
     return render_template("cart.html", cart=cart, total=total)
 
 @app.route("/checkout")
+@login_required
 def checkout():
     cart = session.get("cart", [])
+    shipping = session.get("shipping", {})
     total = sum(item["price"] for item in cart)
-    session["cart"] = []  # clear cart after checkout
+
+    # Save order if we have shipping info
+    if cart and shipping:
+        with sqlite3.connect("pcstore.db", timeout=10) as conn:
+            c = conn.cursor()
+            c.execute("""
+                INSERT INTO orders (email, name, address, phone, items_json, total)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (
+                session.get("email"),
+                shipping.get("name"),
+                shipping.get("address"),
+                shipping.get("phone"),
+                json.dumps(cart),
+                total
+            ))
+            conn.commit()
+
+    # Clear cart & shipping after checkout
+    session["cart"] = []
+    session.pop("shipping", None)
+
     return render_template("checkout.html", total=total)
 
-# ✅ View all submitted builds (admin only)
 @app.route("/submissions")
+@login_required
 def submissions():
-    if not session.get("logged_in"):
-        return redirect(url_for("login"))
-
-    conn = sqlite3.connect("pcstore.db")
-    c = conn.cursor()
-    c.execute("SELECT * FROM builds")
-    builds = c.fetchall()
-    conn.close()
+    with get_db() as conn:
+        c = conn.cursor()
+        c.execute("SELECT * FROM builds")
+        builds = c.fetchall()
     return render_template("submissions.html", builds=builds)
 
+# ---------- Auth (email + password; safe hashing) ----------
 @app.route("/login", methods=["GET", "POST"])
 def login():
     error = None
-    if request.method == "POST":
-        username = request.form.get("username")
-        password = request.form.get("password")
+    # If already logged in, go home or next
+    if session.get("logged_in"):
+        dest = request.args.get("next") or url_for("home")
+        return redirect(dest)
 
-        if validate_login(username, password):
+    if request.method == "POST":
+        email = request.form.get("email", "").strip().lower()
+        password = request.form.get("password", "")
+
+        status = validate_login(email, password)
+        if status == "ok":
             session["logged_in"] = True
-            session["username"] = username
-            return redirect(url_for("submissions"))
-        else:
-            error = "Invalid username or password"
+            session["email"] = email
+            dest = request.args.get("next") or url_for("home")
+            return redirect(dest)
+        elif status == "not_found":
+            # redirect new user to register with a hint
+            return redirect(url_for("register", email=email))
+        else:  # bad_password
+            error = "Incorrect password. Please try again."
+
     return render_template("login.html", error=error)
 
 @app.route("/register", methods=["GET", "POST"])
 def register():
     error = None
     success = None
-    if request.method == "POST":
-        username = request.form.get("username")
-        password = request.form.get("password")
+    prefill_email = request.args.get("email", "")
 
-        if register_user(username, password):
-            success = "✅ Account created! You can now log in."
+    if request.method == "POST":
+        email = request.form.get("email", "").strip().lower()
+        password = request.form.get("password", "")
+
+        ok, msg = register_user(email, password)
+        if ok:
+            success = "Account created! You can now log in."
+            # Optionally auto-login:
+            session["logged_in"] = True
+            session["email"] = email
+            dest = request.args.get("next") or url_for("home")
+            return redirect(dest)
         else:
-            error = "❌ Username already exists."
-    return render_template("register.html", error=error, success=success)
+            error = msg or "Registration failed. Please try again."
+
+    return render_template("register.html", error=error, success=success, prefill_email=prefill_email)
 
 @app.route("/logout")
 def logout():
-    session.pop("logged_in", None)
-    session.pop("username", None)
+    session.clear()
     return redirect(url_for("home"))
 
 if __name__ == "__main__":
-    print("🚀 Flask app has started!")
+    print("🚀 Flask app started (email/password auth).")
     app.run(debug=True)
