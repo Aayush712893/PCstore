@@ -1,4 +1,5 @@
 from flask import Flask, render_template, session, redirect, url_for, request
+import os
 import sqlite3
 from functools import wraps
 import json
@@ -8,8 +9,15 @@ app = Flask(__name__)
 app.secret_key = "mysecretkey"  # Needed for sessions
 
 # ---------- DB Helpers ----------
+# Use a stable, writable DB path (Render: mount a Persistent Disk at /var/data)
+DB_PATH = os.getenv("DB_PATH", "/var/data/pcstore.db")
+
 def get_db():
-    return sqlite3.connect("pcstore.db", timeout=10)
+    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+    conn = sqlite3.connect(DB_PATH, timeout=10, check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON;")
+    return conn
 
 def create_orders_table():
     with sqlite3.connect("pcstore.db", timeout=10) as conn:
@@ -60,6 +68,42 @@ def create_tables():
         conn.commit()
 
 create_tables()
+
+def ensure_users_schema():
+    """Ensure users table has (email, password_hash). If not, migrate."""
+    with get_db() as conn:
+        c = conn.cursor()
+        # Create table if it doesn't exist at all
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                email TEXT UNIQUE,
+                password_hash TEXT
+            )
+        """)
+        # Inspect current columns
+        c.execute("PRAGMA table_info(users)")
+        cols = {row[1] for row in c.fetchall()}  # set of column names
+
+        required = {"email", "password_hash"}
+        if required.issubset(cols):
+            return  # schema OK
+
+        # Schema is wrong (likely old 'username', 'password'). Migrate.
+        c.execute("ALTER TABLE users RENAME TO users_backup")
+
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                email TEXT UNIQUE,
+                password_hash TEXT
+            )
+        """)
+create_tables()
+create_orders_table()
+ensure_users_schema()
+        
+        # Try copying old data if columns existed
 
 def migrate_builds_table():
     # add new columns if they don't exist yet
