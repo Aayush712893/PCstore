@@ -100,6 +100,7 @@ def ensure_users_schema():
                 password_hash TEXT
             )
         """)
+
 create_tables()
 create_orders_table()
 ensure_users_schema()
@@ -478,7 +479,11 @@ def register():
 @app.route("/admin")
 @admin_required
 def admin():
-    # Fetch all builds
+    # Ensure tables exist (no-ops if already there)
+    create_tables()
+    create_orders_table()
+
+    # Fetch builds
     with get_db() as conn:
         c = conn.cursor()
         c.execute("""
@@ -488,7 +493,7 @@ def admin():
         """)
         builds = c.fetchall()
 
-    # Fetch all orders
+    # Fetch orders
     with get_db() as conn:
         c = conn.cursor()
         c.execute("""
@@ -498,10 +503,10 @@ def admin():
         """)
         orders = c.fetchall()
 
-    # Convert rows to plain dicts and parse items_json
     def rowdict(row):
-        return dict(zip(row.keys(), [row[k] for k in row.keys()]))
+        return {k: row[k] for k in row.keys()}
 
+    import json
     builds_list = [rowdict(r) for r in builds]
     orders_list = []
     for r in orders:
@@ -512,7 +517,7 @@ def admin():
             d["items"] = []
         orders_list.append(d)
 
-    return render_template("admin.html", builds=builds_list, orders=orders_list, admin_email=ADMIN_EMAIL)
+    return render_template("admin.html", builds=builds_list, orders=orders_list)
 
 @app.route("/logout")
 def logout():
