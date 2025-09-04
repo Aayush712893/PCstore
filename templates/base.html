@@ -1,70 +1,54 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <title>{% block title %}Your PC{% endblock %}</title>
-    <style>
-        body {
-            font-family: Arial, sans-serif;
-            margin: 0;
-            padding: 0;
-        }
-        header {
-            background: #222;
-            padding: 15px;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            color: white;
-            font-family: Impact, sans-serif;
-        }
-        header a {
-            color: white;
-            text-decoration: none;
-            margin: 0 10px;
-            font-size: 18px;
-        }
-        header nav {
-            flex-grow: 1;
-            text-align: center;
-        }
-        main {
-            padding: 20px;
-        }
-    </style>
+  <meta charset="utf-8">
+  <!-- 🔑 Makes layout adapt to screen width -->
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <title>{% block title %}Your PC{% endblock %}</title>
+
+  <!-- Your favicon, fonts, etc. -->
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
+
 <body>
-<header>
-    <!-- Left: Website name -->
-    <div style="font-size:24px;">
-        <a href="/">Your PC</a>
-    </div>
+  <header class="site-header">
+    <div class="container nav-row">
+      <!-- Left: logo/title -->
+      <a href="{{ url_for('home') }}" class="brand">Your PC</a>
 
-    <!-- Center: Navigation -->
-    <nav>
-        <a href="/">Home</a>
-        <a href="/build">Build</a>
-        <a href="/store">Store</a>
-        <a href="/cart">Cart</a>
-        {% if session.get("username") == "admin" %}
-            <a href="/submissions" style="color:yellow;">Submissions</a>
-        {% endif %}
-    </nav>
+      <!-- Mobile hamburger -->
+      <button class="hamburger" aria-label="Toggle navigation" onclick="document.body.classList.toggle('nav-open')">
+        ☰
+      </button>
 
-    <!-- Right: Authentication -->
-    <div>
-        {% if session.get("logged_in") %}
-            <span>👤 {{ session.get("username") }}</span>
-            <a href="/logout">Logout</a>
+      <!-- Center: main nav -->
+      <nav class="main-nav">
+        <a href="{{ url_for('home') }}">Home</a>
+        <a href="{{ url_for('build') }}">Build</a>
+        <a href="{{ url_for('store') }}">Store</a>
+        <a href="{{ url_for('cart') }}">Cart</a>
+      </nav>
+
+      <!-- Right: auth -->
+      <div class="auth-nav">
+        {% if session.get('logged_in') %}
+          <span class="user-email">{{ session.get('email') }}</span>
+          <a href="{{ url_for('logout') }}" class="btn small">Logout</a>
         {% else %}
-            <a href="/login">Login</a>
-            <a href="/register">Register</a>
+          <a href="{{ url_for('login') }}" class="btn small">Login</a>
+          <a href="{{ url_for('register') }}" class="btn small alt">Register</a>
         {% endif %}
+      </div>
     </div>
-</header>
+  </header>
 
-<main>
+  <main class="container">
     {% block content %}{% endblock %}
-</main>
+  </main>
+
+  <footer class="site-footer">
+    <div class="container">© {{ 2025 }} Your PC</div>
+  </footer>
 </body>
 </html>

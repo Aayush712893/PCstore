@@ -1,213 +1,158 @@
-/* Navbar layout */
-.navbar {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    background: #1a1a1a;
-    padding: 15px 30px;
-    box-shadow: 0 2px 5px rgba(0,0,0,0.2);
-    color: white;
-    font-family: Impact, Haettenschweiler, "Arial Narrow Bold", sans-serif;
+/* ============== Base ============== */
+:root{
+  --bg:#0b0b0c;
+  --panel:#141417;
+  --text:#f3f5f7;
+  --muted:#a8adb7;
+  --brand:#0ea5e9; /* cyan-ish */
+  --accent:#2563eb; /* blue */
+  --border:#24242a;
 }
 
-/* Left: Brand */
-.nav-left .brand {
-    font-size: 26px;   /* Bigger */
-    font-weight: bold;
-    color: #ffcc00;
+*{box-sizing:border-box}
+html,body{height:100%}
+body{
+  margin:0;
+  font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+  background:var(--bg);
+  color:var(--text);
+  -webkit-tap-highlight-color: transparent;
 }
 
-/* Center nav links */
-.nav-center {
-    flex: 1;
-    text-align: center;
+a{color:var(--text); text-decoration:none}
+a:hover{opacity:.9}
+
+.container{
+  width:min(1100px, 92%);
+  margin-inline:auto;
 }
 
-.nav-center a {
-    color: white;
-    text-decoration: none;
-    margin: 0 20px;
-    font-size: 20px;
-    font-family: Impact, Haettenschweiler, "Arial Narrow Bold", sans-serif;
-    transition: color 0.3s ease;
+/* ============== Header/Nav ============== */
+.site-header{
+  position:sticky; top:0; z-index:50;
+  background:rgba(11,11,12,.9);
+  backdrop-filter: blur(8px);
+  border-bottom:1px solid var(--border);
 }
 
-.nav-center a:hover {
-    color: #ffcc00;
+.nav-row{
+  display:flex; align-items:center; gap:16px;
+  min-height:64px;
 }
 
-/* Right: Login */
-.nav-right a {
-    color: white;
-    text-decoration: none;
-    font-size: 20px;  /* Bigger */
-    font-weight: bold;
-    transition: color 0.3s ease;
+.brand{
+  font-family: Impact, Haettenschweiler, 'Arial Narrow Bold', sans-serif;
+  font-size: clamp(20px, 2.6vw, 28px);
+  letter-spacing:.5px;
+  color:var(--brand);
 }
 
-.nav-right a:hover {
-    color: #ffcc00;
+.hamburger{
+  display:none;
+  font-size:24px;
+  background:none; border:0; color:var(--text);
+  padding:8px; border-radius:8px;
 }
 
-/* Hero Section */
-.hero {
-    text-align: center;
-    padding: 80px 20px;
-    background: linear-gradient(135deg, #1a1a1a, #333);
-    color: white;
-    font-family: Impact, Haettenschweiler, "Arial Narrow Bold", sans-serif;
+.main-nav, .auth-nav{
+  display:flex; align-items:center; gap:14px;
 }
 
-.hero h1 {
-    font-size: 50px;
-    margin-bottom: 20px;
+.main-nav a, .auth-nav a{
+  padding:8px 12px; border-radius:10px;
 }
 
-.hero p {
-    font-size: 20px;
-    margin-bottom: 30px;
+.btn{ background:var(--accent); color:#fff; }
+.btn.alt{ background:#374151; }
+.btn.small{ padding:6px 10px; font-size:14px; }
+
+.user-email{ color:var(--muted); font-size:14px; }
+
+/* Desktop layout: brand | main-nav (center) | auth (right) */
+.nav-row{ justify-content:space-between; }
+.main-nav{ margin-left:auto; margin-right:auto; }
+
+/* ============== Mobile Nav ============== */
+@media (max-width: 768px){
+  .hamburger{ display:block; margin-left:auto; }
+  .main-nav, .auth-nav{
+    position:fixed; inset:auto 0 0 0;
+    background:var(--panel);
+    border-top:1px solid var(--border);
+    padding:16px;
+    display:grid; gap:10px;
+    transform: translateY(100%);
+    transition: transform .2s ease;
+  }
+  body.nav-open .main-nav,
+  body.nav-open .auth-nav{ transform: translateY(0) }
+  .auth-nav{ border-top:0; padding-top:0 }
+  .nav-row{ justify-content:space-between }
 }
 
-.btn-large {
-    font-size: 20px;
-    padding: 15px 30px;
-    border-radius: 8px;
-    background: #ffcc00;
-    border: none;
-    cursor: pointer;
-    transition: 0.3s;
+/* ============== Cards/Grid (home & store) ============== */
+.prebuild-grid{
+  display:grid;
+  grid-template-columns: repeat(4, minmax(180px, 1fr));
+  gap:16px;
 }
 
-.btn-large:hover {
-    background: white;
-    color: #1a1a1a;
+@media (max-width:1024px){
+  .prebuild-grid{ grid-template-columns: repeat(3, 1fr); }
+}
+@media (max-width:768px){
+  .prebuild-grid{ grid-template-columns: repeat(2, 1fr); }
+}
+@media (max-width:480px){
+  .prebuild-grid{ grid-template-columns: 1fr; }
 }
 
-/* Prebuilds Section */
-.prebuilds {
-    padding: 50px 20px;
-    text-align: center;
+.card{
+  background:var(--panel);
+  border:1px solid var(--border);
+  border-radius:16px; overflow:hidden;
+  transition: transform .15s ease, box-shadow .15s ease;
+}
+.card:hover{ transform: translateY(-3px); box-shadow:0 8px 20px rgba(0,0,0,.25); }
+
+.card img{
+  width:100%; height:180px; object-fit:cover; display:block;
 }
 
-.prebuilds h2 {
-    font-size: 32px;
-    margin-bottom: 40px;
-    font-family: Impact, Haettenschweiler, "Arial Narrow Bold", sans-serif;
+.card-body{ padding:12px; }
+.card-title{
+  font-family: "Bahnschrift SemiBold", Bahnschrift, Arial, sans-serif;
+  font-size: clamp(16px, 2.5vw, 18px);
+}
+.card-price{ color:var(--brand); font-weight:600; margin-top:6px; }
+.card-actions{ display:flex; gap:10px; margin-top:10px; }
+
+/* ============== Forms ============== */
+form input, form select, form textarea, form button{
+  font-size:16px;
+}
+form input, form select, form textarea{
+  width:100%; padding:12px; border-radius:10px;
+  border:1px solid var(--border); background:#0f0f12; color:var(--text);
+}
+form textarea{ resize:vertical }
+form button{
+  padding:12px; border-radius:10px; border:0;
+  background:var(--accent); color:#fff; font-weight:600;
 }
 
-.prebuild-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-    gap: 25px;
-}
+/* Space main content from sticky header */
+main.container{ padding: 18px 0 40px; }
 
-.prebuild-card {
-    background: white;
-    padding: 20px;
-    border-radius: 12px;
-    box-shadow: 0 4px 10px rgba(0,0,0,0.1);
-    transition: transform 0.3s, box-shadow 0.3s;
-    cursor: pointer;
-    text-align: left;
-}
+/* ============== Images & tables fallback ============== */
+img{ max-width:100%; height:auto; }
+table{ width:100%; border-collapse:collapse }
+td, th{ padding:10px; border-bottom:1px solid var(--border) }
 
-/* Product name (homepage) */
-.prebuild-card h3 {
-    margin-top: 0;
-    font-family: "Bahnschrift SemiBold", "Arial", sans-serif;
-    font-size: 22px;
+/* ============== Footer ============== */
+.site-footer{
+  border-top:1px solid var(--border);
+  padding:16px 0; color:var(--muted);
+  background:#0d0d10;
+  margin-top:40px;
 }
-
-/* Specs and details in Eras Demi ITC */
-.prebuild-card p {
-    margin: 8px 0;
-    font-family: "Eras Demi ITC", "Arial", sans-serif;
-    font-size: 16px;
-    color: #444;
-}
-
-.price {
-    font-weight: bold;
-    color: #ff6600;
-    font-size: 18px;
-    font-family: "Eras Demi ITC", "Arial", sans-serif;
-}
-
-/* Prebuilds Home Grid */
-.prebuild-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-    gap: 25px;
-}
-
-.prebuild-card {
-    background: white;
-    border-radius: 12px;
-    padding: 15px;
-    text-align: center;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.1);
-    transition: transform 0.3s, box-shadow 0.3s;
-    cursor: pointer;
-}
-
-.prebuild-card img {
-    width: 100%;
-    height: 180px;
-    object-fit: cover;
-    border-radius: 8px;
-    margin-bottom: 10px;
-}
-
-.prebuild-card:hover {
-    transform: translateY(-8px);
-    box-shadow: 0 8px 20px rgba(0,0,0,0.2);
-}
-
-/* Store Page */
-.products {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-    gap: 25px;
-    padding: 20px;
-}
-
-.product-card {
-    background: white;
-    border-radius: 12px;
-    padding: 20px;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.1);
-}
-
-.product-card img {
-    width: 100%;
-    height: 200px;
-    object-fit: cover;
-    border-radius: 8px;
-    margin-bottom: 15px;
-}
-
-.product-card ul {
-    text-align: left;
-    margin-top: 10px;
-    padding-left: 20px;
-}
-
-/* Add to Cart button */
-.product-card button {
-    margin-top: 10px;
-    padding: 10px;
-    width: 100%;
-    background: #1a1a1a;
-    color: white;
-    border: none;
-    border-radius: 6px;
-    font-family: "Bahnschrift SemiBold", "Arial", sans-serif;
-    cursor: pointer;
-    transition: 0.3s;
-}
-
-.product-card button:hover {
-    background: #ffcc00;
-    color: #000;
-}
-
