@@ -6,19 +6,24 @@
 <h2>Register</h2>
 
 {% if error %}
-    <p style="color:red;">{{ error }}</p>
+  <p style="color:red;">{{ error }}</p>
 {% endif %}
 {% if success %}
-    <p style="color:green;">{{ success }}</p>
+  <p style="color:green;">{{ success }}</p>
 {% endif %}
 
-<form method="POST" action="/register" style="max-width: 400px; margin:auto;">
-    <label for="username">Username:</label><br>
-    <input type="text" id="username" name="username" required style="width:100%; padding:8px;"><br><br>
+<form method="POST" action="{{ url_for('register', next=request.args.get('next')) }}" style="max-width: 400px; margin:auto;">
+  <label for="email">Email:</label><br>
+  <input type="email" id="email" name="email" value="{{ prefill_email or '' }}" required style="width:100%; padding:8px;"><br><br>
 
-    <label for="password">Password:</label><br>
-    <input type="password" id="password" name="password" required style="width:100%; padding:8px;"><br><br>
+  <label for="password">Create a password:</label><br>
+  <input type="password" id="password" name="password" required style="width:100%; padding:8px;"><br><br>
 
-    <button type="submit" style="width:100%; padding:10px;">Register</button>
+  <button type="submit" style="width:100%; padding:10px;">Create Account</button>
 </form>
+
+<p style="text-align:center; margin-top:10px;">
+  Already have an account?
+  <a href="{{ url_for('login', next=request.args.get('next')) }}">Login</a>
+</p>
 {% endblock %}

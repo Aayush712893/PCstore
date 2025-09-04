@@ -6,16 +6,21 @@
 <h2>Login</h2>
 
 {% if error %}
-    <p style="color:red;">{{ error }}</p>
+  <p style="color:red;">{{ error }}</p>
 {% endif %}
 
-<form method="POST" action="/login" style="max-width: 400px; margin:auto;">
-    <label for="username">Username:</label><br>
-    <input type="text" id="username" name="username" required style="width:100%; padding:8px;"><br><br>
+<form method="POST" action="{{ url_for('login', next=request.args.get('next')) }}" style="max-width: 400px; margin:auto;">
+  <label for="email">Email (don’t use your Gmail password here):</label><br>
+  <input type="email" id="email" name="email" required style="width:100%; padding:8px;"><br><br>
 
-    <label for="password">Password:</label><br>
-    <input type="password" id="password" name="password" required style="width:100%; padding:8px;"><br><br>
+  <label for="password">Password:</label><br>
+  <input type="password" id="password" name="password" required style="width:100%; padding:8px;"><br><br>
 
-    <button type="submit" style="width:100%; padding:10px;">Login</button>
+  <button type="submit" style="width:100%; padding:10px;">Login</button>
 </form>
+
+<p style="text-align:center; margin-top:10px;">
+  New here?
+  <a href="{{ url_for('register', next=request.args.get('next')) }}">Register</a>
+</p>
 {% endblock %}

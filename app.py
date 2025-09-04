@@ -127,16 +127,21 @@ def migrate_builds_table():
 # call after create_tables()
 migrate_builds_table()
 
-def register_user(email: str, password: str) -> tuple[bool, str | None]:
+def register_user(email: str, password: str):
+    email = (email or "").strip().lower()
+    if not email:
+        return False, "Email cannot be empty."
     try:
         with get_db() as conn:
             c = conn.cursor()
-            c.execute("INSERT INTO users (email, password_hash) VALUES (?, ?)",
-                      (email, generate_password_hash(password)))
+            c.execute(
+                "INSERT INTO users (email, password_hash) VALUES (?, ?)",
+                (email, generate_password_hash(password)),
+            )
             conn.commit()
         return True, None
     except sqlite3.IntegrityError:
-        return False, "Email already registered."
+        return False, "This email is already registered."
 
 def find_user(email: str):
     with get_db() as conn:
@@ -423,19 +428,32 @@ def register():
     prefill_email = request.args.get("email", "")
 
     if request.method == "POST":
-        email = request.form.get("email", "").strip().lower()
+        raw_email = request.form.get("email", "")
         password = request.form.get("password", "")
+
+        email = raw_email.strip().lower()
+        print("DEBUG register email raw:", repr(raw_email), "normalized:", repr(email))
+
+        # Basic validation
+        if not email:
+            error = "Please enter your email."
+            return render_template("register.html", error=error, success=success, prefill_email="")
+        if "@" not in email or "." not in email.split("@")[-1]:
+            error = "Please enter a valid email address."
+            return render_template("register.html", error=error, success=success, prefill_email=email)
+        if not password:
+            error = "Please enter a password."
+            return render_template("register.html", error=error, success=success, prefill_email=email)
 
         ok, msg = register_user(email, password)
         if ok:
-            success = "Account created! You can now log in."
-            # Optionally auto-login:
             session["logged_in"] = True
             session["email"] = email
             dest = request.args.get("next") or url_for("home")
             return redirect(dest)
         else:
             error = msg or "Registration failed. Please try again."
+            return render_template("register.html", error=error, success=success, prefill_email=email)
 
     return render_template("register.html", error=error, success=success, prefill_email=prefill_email)
 
