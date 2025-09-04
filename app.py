@@ -20,6 +20,13 @@ def get_db():
     conn.execute("PRAGMA foreign_keys = ON;")
     return conn
 
+def list_tables_and_db_path():
+    with get_db() as conn:
+        c = conn.cursor()
+        c.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;")
+        tables = [r[0] for r in c.fetchall()]
+    return {"db_path": DB_PATH, "tables": tables}
+
 def create_orders_table():
     with sqlite3.connect("pcstore.db", timeout=10) as conn:
         c = conn.cursor()
@@ -479,45 +486,45 @@ def register():
 @app.route("/admin")
 @admin_required
 def admin():
-    # Ensure tables exist (no-ops if already there)
     create_tables()
     create_orders_table()
 
-    # Fetch builds
     with get_db() as conn:
         c = conn.cursor()
         c.execute("""
             SELECT id, email, brand, processor, motherboard, ram, ssd, gpu, psu, cooling, aio
-            FROM builds
-            ORDER BY id DESC
+            FROM builds ORDER BY id DESC
         """)
         builds = c.fetchall()
 
-    # Fetch orders
     with get_db() as conn:
         c = conn.cursor()
         c.execute("""
             SELECT id, email, name, address, phone, items_json, total
-            FROM orders
-            ORDER BY id DESC
+            FROM orders ORDER BY id DESC
         """)
         orders = c.fetchall()
 
-    def rowdict(row):
-        return {k: row[k] for k in row.keys()}
-
+    def rowdict(row): return {k: row[k] for k in row.keys()}
     import json
     builds_list = [rowdict(r) for r in builds]
     orders_list = []
     for r in orders:
         d = rowdict(r)
-        try:
-            d["items"] = json.loads(d.get("items_json") or "[]")
-        except Exception:
-            d["items"] = []
+        try: d["items"] = json.loads(d.get("items_json") or "[]")
+        except: d["items"] = []
         orders_list.append(d)
 
     return render_template("admin.html", builds=builds_list, orders=orders_list)
+
+@app.route("/admin/initdb")
+@admin_required
+def admin_initdb():
+    # Force-create tables and show what exists now
+    create_tables()
+    create_orders_table()
+    info = list_tables_and_db_path()
+    return f"<pre>DB Path: {info['db_path']}\nTables: {info['tables']}</pre>"
 
 @app.route("/logout")
 def logout():
