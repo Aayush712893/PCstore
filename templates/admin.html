@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+
+{% block title %}Admin Dashboard - Your PC{% endblock %}
+
+{% block content %}
+<h2 style="margin-bottom:12px;">Admin Dashboard</h2>
+<p style="color:#a8adb7; margin-top:0;">Signed in as: <strong>{{ session.get('email') }}</strong></p>
+
+<!-- Builds Section -->
+<section style="margin-top:24px;">
+  <h3>Submitted Build Forms</h3>
+  {% if builds and builds|length > 0 %}
+  <div style="overflow:auto;">
+    <table>
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>User Email</th>
+          <th>Brand</th>
+          <th>Processor</th>
+          <th>Motherboard</th>
+          <th>RAM</th>
+          <th>SSD</th>
+          <th>GPU</th>
+          <th>PSU</th>
+          <th>Cooling</th>
+          <th>AIO</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for b in builds %}
+        <tr>
+          <td>{{ b.id }}</td>
+          <td>{{ b.email }}</td>
+          <td>{{ b.brand }}</td>
+          <td>{{ b.processor }}</td>
+          <td>{{ b.motherboard }}</td>
+          <td>{{ b.ram }}</td>
+          <td>{{ b.ssd }}</td>
+          <td>{{ b.gpu }}</td>
+          <td>{{ b.psu }}</td>
+          <td>{{ b.cooling }}</td>
+          <td>{{ b.aio }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+    <p>No builds submitted yet.</p>
+  {% endif %}
+</section>
+
+<!-- Orders Section -->
+<section style="margin-top:32px;">
+  <h3>Orders (Billing & Shipping)</h3>
+  {% if orders and orders|length > 0 %}
+  <div style="overflow:auto;">
+    <table>
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>User Email</th>
+          <th>Name</th>
+          <th>Address</th>
+          <th>Phone</th>
+          <th>Total (₹)</th>
+          <th>Items</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for o in orders %}
+        <tr>
+          <td>{{ o.id }}</td>
+          <td>{{ o.email }}</td>
+          <td>{{ o.name }}</td>
+          <td style="max-width:300px; white-space:pre-wrap;">{{ o.address }}</td>
+          <td>{{ o.phone }}</td>
+          <td>{{ o.total }}</td>
+          <td style="max-width:360px;">
+            {% if o.items and o.items|length > 0 %}
+              <ul style="margin:0; padding-left:18px;">
+                {% for item in o.items %}
+                <li>{{ item.name }} — ₹{{ item.price }}</li>
+                {% endfor %}
+              </ul>
+            {% else %}
+              <em>No items parsed</em>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+    <p>No orders yet.</p>
+  {% endif %}
+</section>
+{% endblock %}

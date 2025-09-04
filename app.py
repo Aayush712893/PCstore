@@ -4,6 +4,7 @@ import sqlite3
 from functools import wraps
 import json
 from werkzeug.security import generate_password_hash, check_password_hash
+from flask import abort
 
 app = Flask(__name__)
 app.secret_key = "mysecretkey"  # Needed for sessions
@@ -196,6 +197,23 @@ def login_required(view_func):
             return redirect(url_for("login", next=request.path))
         return view_func(*args, **kwargs)
     return wrapper
+
+ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "aayushtiwaryap@gmail.com")
+
+def admin_required(view_func):
+    @wraps(view_func)
+    def wrapper(*args, **kwargs):
+        if not session.get("logged_in"):
+            return redirect(url_for("login", next=request.path))
+        if session.get("email") != ADMIN_EMAIL:
+            # Not your account → 403
+            return abort(403)
+        return view_func(*args, **kwargs)
+    return wrapper
+
+@app.context_processor
+def inject_admin_email():
+    return {"admin_email": ADMIN_EMAIL}
 
 # ---------- Sample Data ----------
 prebuilds = [
@@ -456,6 +474,45 @@ def register():
             return render_template("register.html", error=error, success=success, prefill_email=email)
 
     return render_template("register.html", error=error, success=success, prefill_email=prefill_email)
+
+@app.route("/admin")
+@admin_required
+def admin():
+    # Fetch all builds
+    with get_db() as conn:
+        c = conn.cursor()
+        c.execute("""
+            SELECT id, email, brand, processor, motherboard, ram, ssd, gpu, psu, cooling, aio
+            FROM builds
+            ORDER BY id DESC
+        """)
+        builds = c.fetchall()
+
+    # Fetch all orders
+    with get_db() as conn:
+        c = conn.cursor()
+        c.execute("""
+            SELECT id, email, name, address, phone, items_json, total
+            FROM orders
+            ORDER BY id DESC
+        """)
+        orders = c.fetchall()
+
+    # Convert rows to plain dicts and parse items_json
+    def rowdict(row):
+        return dict(zip(row.keys(), [row[k] for k in row.keys()]))
+
+    builds_list = [rowdict(r) for r in builds]
+    orders_list = []
+    for r in orders:
+        d = rowdict(r)
+        try:
+            d["items"] = json.loads(d.get("items_json") or "[]")
+        except Exception:
+            d["items"] = []
+        orders_list.append(d)
+
+    return render_template("admin.html", builds=builds_list, orders=orders_list, admin_email=ADMIN_EMAIL)
 
 @app.route("/logout")
 def logout():

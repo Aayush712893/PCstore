@@ -22,6 +22,11 @@
         ☰
       </button>
 
+<!-- Inside the header, near your main-nav or auth-nav -->
+{% if session.get('logged_in') and session.get('email') == admin_email %}
+  <a href="{{ url_for('admin') }}" class="btn small alt">Admin</a>
+{% endif %}
+
       <!-- Center: main nav -->
       <nav class="main-nav">
         <a href="{{ url_for('home') }}">Home</a>
