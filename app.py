@@ -1,10 +1,9 @@
-from flask import Flask, render_template, session, redirect, url_for, request
+from flask import Flask, render_template, session, redirect, url_for, request, abort
 import os
 import sqlite3
 from functools import wraps
 import json
 from werkzeug.security import generate_password_hash, check_password_hash
-from flask import abort
 
 app = Flask(__name__)
 app.secret_key = "mysecretkey"  # Needed for sessions
@@ -28,7 +27,8 @@ def list_tables_and_db_path():
     return {"db_path": DB_PATH, "tables": tables}
 
 def create_orders_table():
-    with sqlite3.connect("pcstore.db", timeout=10) as conn:
+    # ✅ use get_db() so it writes to the same DB_PATH
+    with get_db() as conn:
         c = conn.cursor()
         c.execute("""
             CREATE TABLE IF NOT EXISTS orders (
@@ -42,8 +42,6 @@ def create_orders_table():
             )
         """)
         conn.commit()
-
-create_orders_table()
 
 def create_tables():
     with get_db() as conn:
@@ -59,9 +57,9 @@ def create_tables():
             CREATE TABLE IF NOT EXISTS builds (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 email TEXT,
-                customer_name TEXT,   -- NEW
-                whatsapp TEXT,        -- NEW
-                comments TEXT,        -- NEW (optional)
+                customer_name TEXT,
+                whatsapp TEXT,
+                comments TEXT,
                 brand TEXT,
                 processor TEXT,
                 motherboard TEXT,
@@ -75,13 +73,11 @@ def create_tables():
         """)
         conn.commit()
 
-create_tables()
-
 def ensure_users_schema():
     """Ensure users table has (email, password_hash). If not, migrate."""
     with get_db() as conn:
         c = conn.cursor()
-        # Create table if it doesn't exist at all
+        # Create table if it doesn't exist
         c.execute("""
             CREATE TABLE IF NOT EXISTS users (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -91,36 +87,41 @@ def ensure_users_schema():
         """)
         # Inspect current columns
         c.execute("PRAGMA table_info(users)")
-        cols = {row[1] for row in c.fetchall()}  # set of column names
-
+        cols = {row[1] for row in c.fetchall()}
         required = {"email", "password_hash"}
         if required.issubset(cols):
             return  # schema OK
 
-        # Schema is wrong (likely old 'username', 'password'). Migrate.
+        # Schema is wrong (likely old 'username', 'password'). Migrate safely.
         c.execute("ALTER TABLE users RENAME TO users_backup")
-
         c.execute("""
-            CREATE TABLE IF NOT EXISTS users (
+            CREATE TABLE users (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 email TEXT UNIQUE,
                 password_hash TEXT
             )
         """)
-
-create_tables()
-create_orders_table()
-ensure_users_schema()
-        
-        # Try copying old data if columns existed
+        # Try to copy what we can
+        try:
+            c.execute("SELECT username, password FROM users_backup")
+            for username, password in c.fetchall():
+                # password may be plain text from old schema; those users may need reset
+                c.execute(
+                    "INSERT OR IGNORE INTO users (email, password_hash) VALUES (?, ?)",
+                    (username, password)
+                )
+        except sqlite3.OperationalError:
+            # old table didn't have username/password — nothing to copy
+            pass
+        c.execute("DROP TABLE users_backup")
+        conn.commit()
 
 def migrate_builds_table():
     # add new columns if they don't exist yet
     with get_db() as conn:
         c = conn.cursor()
         c.execute("PRAGMA table_info(builds);")
-        cols = {row[1] for row in c.fetchall()}  # set of column names
-
+        cols = {row[1] for row in c.fetchall()}
         to_add = []
         if "customer_name" not in cols:
             to_add.append(("customer_name", "TEXT"))
@@ -128,14 +129,17 @@ def migrate_builds_table():
             to_add.append(("whatsapp", "TEXT"))
         if "comments" not in cols:
             to_add.append(("comments", "TEXT"))
-
         for name, typ in to_add:
             c.execute(f"ALTER TABLE builds ADD COLUMN {name} {typ};")
         conn.commit()
 
-# call after create_tables()
+# ✅ Run at startup (must be at top-level, NOT in if __name__ == "__main__")
+create_tables()
+create_orders_table()
+ensure_users_schema()
 migrate_builds_table()
 
+# ---------- User management ----------
 def register_user(email: str, password: str):
     email = (email or "").strip().lower()
     if not email:
@@ -159,11 +163,6 @@ def find_user(email: str):
         return c.fetchone()
 
 def validate_login(email: str, password: str) -> str:
-    """
-    Returns: "ok" if credentials valid,
-             "not_found" if user doesn't exist,
-             "bad_password" if password wrong.
-    """
     row = find_user(email)
     if not row:
         return "not_found"
@@ -196,12 +195,11 @@ def save_build_to_db(build: dict, email: str):
         ))
         conn.commit()
 
-# ---------- Auth Guard ----------
+# ---------- Auth guards ----------
 def login_required(view_func):
     @wraps(view_func)
     def wrapper(*args, **kwargs):
         if not session.get("logged_in"):
-            # Not logged in: send them to login page
             return redirect(url_for("login", next=request.path))
         return view_func(*args, **kwargs)
     return wrapper
@@ -214,7 +212,6 @@ def admin_required(view_func):
         if not session.get("logged_in"):
             return redirect(url_for("login", next=request.path))
         if session.get("email") != ADMIN_EMAIL:
-            # Not your account → 403
             return abort(403)
         return view_func(*args, **kwargs)
     return wrapper
