@@ -358,6 +358,24 @@ def api_add_to_cart(pc_id):
     cart_total = sum(item["price"] for item in cart)
     return {"ok": True, "cart_count": len(cart), "counts": counts, "cart_total": cart_total}
 
+# Fallback route used by non-JS forms and template POSTs.
+# Put this in app.py near your other cart routes.
+@app.route("/add_to_cart/<int:pc_id>", methods=["POST"])
+def add_to_cart(pc_id):
+    # If not logged in, send user to login page and redirect back to store after login
+    if not session.get("logged_in"):
+        return redirect(url_for("login", next=url_for("store")))
+
+    # Add the product to the session cart (lightweight entry)
+    cart = session.get("cart", [])
+    pc = next((p for p in prebuilds if p["id"] == pc_id), None)
+    if pc:
+        cart.append({"id": pc["id"], "name": pc["name"], "price": pc["price"], "specs": pc.get("specs", [])})
+        session["cart"] = cart
+
+    # Redirect back to store so user can continue shopping
+    return redirect(url_for("store"))
+
 @app.route("/remove_from_cart/<int:index>", methods=["POST", "GET"])
 @login_required
 def remove_from_cart(index):

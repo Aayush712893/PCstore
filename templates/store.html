@@ -22,7 +22,7 @@
       <div class="card-title">{{ pc.name }}</div>
       <div class="card-price">₹{{ pc.price }}</div>
 
-      <!-- SHOW FULL SPECS (no "...more specs" placeholder) -->
+      <!-- FULL SPECS -->
       <div style="margin:8px 0;">
         <strong style="font-size:14px;">Specs:</strong>
         <ul style="margin:6px 0 0 18px; color:var(--muted); font-size:14px;">
@@ -32,22 +32,30 @@
         </ul>
       </div>
 
-      <!-- Add/remove buttons & count -->
+      <!-- Buttons: JS-enabled + no-JS fallback -->
       <div style="display:flex; gap:8px; align-items:center; margin-top:10px;">
+        <!-- JS-enabled button (calls API) -->
         <button class="btn small add-btn" data-pc-id="{{ pc.id }}">＋ Add</button>
 
-        <div style="display:flex; align-items:center; gap:6px; margin-left:8px;">
-          <button class="btn small remove-one-btn" data-pc-id="{{ pc.id }}" {% if (cart_counts.get(pc.id) or 0) == 0 %}disabled{% endif %}>−</button>
-          <div class="card-count" style="min-width:34px; text-align:center; font-weight:700;">{{ cart_counts.get(pc.id) or 0 }}</div>
-        </div>
-      </div>
+        <!-- Remove one unit button (JS) -->
+        <button class="btn small remove-one-btn" data-pc-id="{{ pc.id }}" {% if (cart_counts.get(pc.id) or 0) == 0 %}disabled{% endif %}>−</button>
 
+        <!-- Count display -->
+        <div class="card-count" style="min-width:34px; text-align:center; font-weight:700;">{{ cart_counts.get(pc.id) or 0 }}</div>
+
+        <!-- No-JS fallback form: submits to server route that redirects to login if needed -->
+        <noscript>
+          <form method="POST" action="{{ url_for('add_to_cart', pc_id=pc.id) }}" style="display:inline;">
+            <button type="submit" class="btn small" style="margin-left:8px;">Add (no-js)</button>
+          </form>
+        </noscript>
+      </div>
     </div>
   </div>
   {% endfor %}
 </div>
 
-<!-- Proceed button at bottom of store page -->
+<!-- Proceed button -->
 <div style="margin-top:24px; text-align:center;">
   <a id="proceed-btn" href="{% if cart_count > 0 %}{{ url_for('shipping') }}{% else %}#{% endif %}" class="btn" style="padding:12px 24px; font-size:16px; {% if cart_count == 0 %}opacity:.6; pointer-events:none;{% endif %}">
     <span id="proceed-text">{% if cart_count > 0 %}Proceed to Checkout ({{ cart_count }} item{% if cart_count > 1 %}s{% endif %}){% else %}Your cart is empty — add items to proceed{% endif %}</span>
@@ -55,24 +63,37 @@
 </div>
 
 <script>
+/*
+  Behavior:
+  - Click + -> POST /api/add_to_cart/<id>
+  - Click − -> POST /api/remove_one_from_cart/<id>
+  - API returns JSON:
+     { ok: true, cart_count: N, counts: { id: qty, ... }, cart_total: total }
+    OR { ok: false, error: "not_logged_in" } with HTTP 401 for unauthenticated.
+  - On not_logged_in -> redirect to /login?next=/store
+*/
+
 async function postJson(url) {
   const resp = await fetch(url, {
     method: "POST",
     headers: { "Accept": "application/json" },
     credentials: "same-origin"
   });
-  return resp.json();
+  // Try parse JSON safely
+  let data;
+  try { data = await resp.json(); } catch (e) { data = null; }
+  return { status: resp.status, json: data };
 }
 
 function updateUI(counts, totalCount, cartTotal) {
-  // update header count badge(s)
+  // header badge(s)
   document.querySelectorAll('.cart-count-badge').forEach(el => el.textContent = totalCount);
 
-  // update global cart total
+  // total
   const totalEl = document.getElementById('cart-total');
   if (totalEl) totalEl.textContent = cartTotal ?? "0";
 
-  // update per-card counts and remove buttons
+  // per-card counts + remove button disable/enable
   document.querySelectorAll('.card').forEach(card => {
     const id = Number(card.dataset.pcId);
     const count = counts[id] || 0;
@@ -82,7 +103,7 @@ function updateUI(counts, totalCount, cartTotal) {
     if (removeBtn) removeBtn.disabled = count === 0;
   });
 
-  // update proceed button text/enable
+  // proceed button
   const proceedBtn = document.getElementById('proceed-btn');
   const proceedText = document.getElementById('proceed-text');
   if (totalCount > 0) {
@@ -99,30 +120,46 @@ function updateUI(counts, totalCount, cartTotal) {
 }
 
 document.addEventListener('DOMContentLoaded', function() {
+  // wire add buttons
   document.querySelectorAll('.add-btn').forEach(btn => {
     btn.addEventListener('click', async function() {
       const id = btn.dataset.pcId;
       btn.disabled = true;
-      const data = await postJson(`/api/add_to_cart/${id}`);
+      const { status, json } = await postJson(`/api/add_to_cart/${id}`);
       btn.disabled = false;
-      if (data && data.ok) {
-        updateUI(data.counts || {}, data.cart_count || 0, data.cart_total || 0);
+
+      if (status === 401 || (json && json.error === "not_logged_in")) {
+        // redirect to login, preserve return-to
+        window.location.href = "{{ url_for('login') }}?next={{ url_for('store') }}";
+        return;
+      }
+      if (json && json.ok) {
+        updateUI(json.counts || {}, json.cart_count || 0, json.cart_total || 0);
       } else {
-        alert("Could not add item to cart. Are you logged in?");
+        // Generic fallback: show an alert and log response
+        console.error("Add API response:", status, json);
+        alert("Could not add item to cart. Please try again or login.");
       }
     });
   });
 
+  // wire remove-one buttons
   document.querySelectorAll('.remove-one-btn').forEach(btn => {
     btn.addEventListener('click', async function() {
       const id = btn.dataset.pcId;
       btn.disabled = true;
-      const data = await postJson(`/api/remove_one_from_cart/${id}`);
+      const { status, json } = await postJson(`/api/remove_one_from_cart/${id}`);
       btn.disabled = false;
-      if (data && data.ok) {
-        updateUI(data.counts || {}, data.cart_count || 0, data.cart_total || 0);
+
+      if (status === 401 || (json && json.error === "not_logged_in")) {
+        window.location.href = "{{ url_for('login') }}?next={{ url_for('store') }}";
+        return;
+      }
+      if (json && json.ok) {
+        updateUI(json.counts || {}, json.cart_count || 0, json.cart_total || 0);
       } else {
-        alert("Could not remove item.");
+        console.error("Remove API response:", status, json);
+        alert("Could not remove item. Please try again.");
       }
     });
   });
