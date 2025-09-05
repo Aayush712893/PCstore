@@ -220,6 +220,19 @@ def admin_required(view_func):
 def inject_admin_email():
     return {"admin_email": ADMIN_EMAIL}
 
+@app.context_processor
+def inject_cart_info():
+    cart = session.get("cart", [])
+    counts = {}
+    for it in cart:
+        counts[it["id"]] = counts.get(it["id"], 0) + 1
+    cart_total = sum(item["price"] for item in cart)
+    return {
+        "cart_count": len(cart),
+        "cart_total": cart_total,
+        "cart_counts": counts,
+        "cart_items": cart
+    }    
 # ---------- Sample Data ----------
 prebuilds = [
     {
@@ -330,33 +343,44 @@ def store():
     return render_template("store.html", prebuilds=prebuilds)
 
 # Replace your existing add_to_cart route with this one
-@app.route("/add_to_cart/<int:pc_id>", methods=["POST"])
+@app.route("/api/add_to_cart/<int:pc_id>", methods=["POST"])
 @login_required
-def add_to_cart(pc_id):
-    # ensure cart exists
+def api_add_to_cart(pc_id):
     cart = session.get("cart", [])
-    # find the pc by id and append a lightweight item (id, name, price)
-    for pc in prebuilds:
-        if pc["id"] == pc_id:
-            cart.append({"id": pc["id"], "name": pc["name"], "price": pc["price"]})
-            break
+    pc = next((p for p in prebuilds if p["id"] == pc_id), None)
+    if not pc:
+        return {"ok": False, "error": "product_not_found"}, 404
+    cart.append({"id": pc["id"], "name": pc["name"], "price": pc["price"], "specs": pc.get("specs", [])})
     session["cart"] = cart
-    # Redirect back to store so user can continue shopping
-    return redirect(url_for("store"))
+    counts = {}
+    for it in cart:
+        counts[it["id"]] = counts.get(it["id"], 0) + 1
+    cart_total = sum(item["price"] for item in cart)
+    return {"ok": True, "cart_count": len(cart), "counts": counts, "cart_total": cart_total}
 
-@app.context_processor
-def inject_cart_info():
-    cart = session.get("cart", [])
-    return {"cart_count": len(cart), "cart_total": sum(item["price"] for item in cart)}
-
-@app.route("/remove_from_cart/<int:index>", methods=["POST"])
+@app.route("/remove_from_cart/<int:index>", methods=["POST", "GET"])
 @login_required
 def remove_from_cart(index):
     cart = session.get("cart", [])
     if 0 <= index < len(cart):
         cart.pop(index)
-    session["cart"] = cart
+        session["cart"] = cart
     return redirect(url_for("cart"))
+
+@app.route("/api/remove_one_from_cart/<int:pc_id>", methods=["POST"])
+@login_required
+def api_remove_one_from_cart(pc_id):
+    cart = session.get("cart", [])
+    idx = next((i for i, it in enumerate(cart) if it["id"] == pc_id), None)
+    if idx is None:
+        return {"ok": False, "error": "item_not_in_cart"}, 404
+    cart.pop(idx)
+    session["cart"] = cart
+    counts = {}
+    for it in cart:
+        counts[it["id"]] = counts.get(it["id"], 0) + 1
+    cart_total = sum(item["price"] for item in cart)
+    return {"ok": True, "cart_count": len(cart), "counts": counts, "cart_total": cart_total}
 
 @app.route("/shipping", methods=["GET", "POST"])
 @login_required
@@ -378,15 +402,6 @@ def shipping():
             return redirect(url_for("checkout"))
 
     return render_template("shipping.html", error=error)
-
-@app.route("/remove_from_cart/<int:index>")
-@login_required
-def remove_from_cart(index):
-    cart = session.get("cart", [])
-    if 0 <= index < len(cart):
-        cart.pop(index)
-    session["cart"] = cart
-    return redirect(url_for("cart"))
 
 @app.route("/cart")
 @login_required

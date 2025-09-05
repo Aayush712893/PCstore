@@ -5,49 +5,128 @@
 <h2 style="text-align:center; margin-bottom:12px;">Prebuilt PCs</h2>
 
 <!-- Cart summary at top -->
-<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; gap:12px; flex-wrap:wrap;">
   <div>
-    <strong>Items in cart:</strong> {{ cart_count }}
+    <strong>Items in cart:</strong> <span class="cart-count-badge">{{ cart_count }}</span>
   </div>
   <div>
-    <strong>Total:</strong> ₹{{ cart_total }}
+    <strong>Total:</strong> ₹<span id="cart-total">{{ cart_total }}</span>
   </div>
 </div>
 
 <div class="prebuild-grid">
   {% for pc in prebuilds %}
-  <div class="card">
+  <div class="card" data-pc-id="{{ pc.id }}">
     <img src="{{ url_for('static', filename=pc.image) }}" alt="{{ pc.name }}">
     <div class="card-body">
       <div class="card-title">{{ pc.name }}</div>
       <div class="card-price">₹{{ pc.price }}</div>
-      <p style="margin:8px 0; color:var(--muted); font-size:14px;">
-        {% for s in pc.specs[:3] %}
-          <div>{{ s }}</div>
-        {% endfor %}
-        <small>...more specs on product page</small>
-      </p>
 
-      <!-- Add to cart form (POST) -->
-      <form method="POST" action="{{ url_for('add_to_cart', pc_id=pc.id) }}">
-        <button type="submit" class="btn" style="width:100%;">Add to Cart</button>
-      </form>
+      <!-- SHOW FULL SPECS (no "...more specs" placeholder) -->
+      <div style="margin:8px 0;">
+        <strong style="font-size:14px;">Specs:</strong>
+        <ul style="margin:6px 0 0 18px; color:var(--muted); font-size:14px;">
+          {% for s in pc.specs %}
+            <li>{{ s }}</li>
+          {% endfor %}
+        </ul>
+      </div>
+
+      <!-- Add/remove buttons & count -->
+      <div style="display:flex; gap:8px; align-items:center; margin-top:10px;">
+        <button class="btn small add-btn" data-pc-id="{{ pc.id }}">＋ Add</button>
+
+        <div style="display:flex; align-items:center; gap:6px; margin-left:8px;">
+          <button class="btn small remove-one-btn" data-pc-id="{{ pc.id }}" {% if (cart_counts.get(pc.id) or 0) == 0 %}disabled{% endif %}>−</button>
+          <div class="card-count" style="min-width:34px; text-align:center; font-weight:700;">{{ cart_counts.get(pc.id) or 0 }}</div>
+        </div>
+      </div>
+
     </div>
   </div>
   {% endfor %}
 </div>
 
-<!-- Proceed button fixed at bottom of store page -->
+<!-- Proceed button at bottom of store page -->
 <div style="margin-top:24px; text-align:center;">
-  {% if cart_count > 0 %}
-    <a href="{{ url_for('shipping') }}" class="btn" style="padding:12px 24px; font-size:16px;">
-      Proceed to Checkout ({{ cart_count }} item{% if cart_count > 1 %}s{% endif %})
-    </a>
-  {% else %}
-    <button class="btn" style="padding:12px 24px; font-size:16px;" disabled>
-      Your cart is empty — add items to proceed
-    </button>
-  {% endif %}
+  <a id="proceed-btn" href="{% if cart_count > 0 %}{{ url_for('shipping') }}{% else %}#{% endif %}" class="btn" style="padding:12px 24px; font-size:16px; {% if cart_count == 0 %}opacity:.6; pointer-events:none;{% endif %}">
+    <span id="proceed-text">{% if cart_count > 0 %}Proceed to Checkout ({{ cart_count }} item{% if cart_count > 1 %}s{% endif %}){% else %}Your cart is empty — add items to proceed{% endif %}</span>
+  </a>
 </div>
+
+<script>
+async function postJson(url) {
+  const resp = await fetch(url, {
+    method: "POST",
+    headers: { "Accept": "application/json" },
+    credentials: "same-origin"
+  });
+  return resp.json();
+}
+
+function updateUI(counts, totalCount, cartTotal) {
+  // update header count badge(s)
+  document.querySelectorAll('.cart-count-badge').forEach(el => el.textContent = totalCount);
+
+  // update global cart total
+  const totalEl = document.getElementById('cart-total');
+  if (totalEl) totalEl.textContent = cartTotal ?? "0";
+
+  // update per-card counts and remove buttons
+  document.querySelectorAll('.card').forEach(card => {
+    const id = Number(card.dataset.pcId);
+    const count = counts[id] || 0;
+    const numElt = card.querySelector('.card-count');
+    if (numElt) numElt.textContent = count;
+    const removeBtn = card.querySelector('.remove-one-btn');
+    if (removeBtn) removeBtn.disabled = count === 0;
+  });
+
+  // update proceed button text/enable
+  const proceedBtn = document.getElementById('proceed-btn');
+  const proceedText = document.getElementById('proceed-text');
+  if (totalCount > 0) {
+    proceedBtn.href = "{{ url_for('shipping') }}";
+    proceedBtn.style.pointerEvents = "";
+    proceedBtn.style.opacity = "1";
+    proceedText.textContent = `Proceed to Checkout (${totalCount} item${totalCount>1 ? 's' : ''})`;
+  } else {
+    proceedBtn.href = "#";
+    proceedBtn.style.pointerEvents = "none";
+    proceedBtn.style.opacity = ".6";
+    proceedText.textContent = "Your cart is empty — add items to proceed";
+  }
+}
+
+document.addEventListener('DOMContentLoaded', function() {
+  document.querySelectorAll('.add-btn').forEach(btn => {
+    btn.addEventListener('click', async function() {
+      const id = btn.dataset.pcId;
+      btn.disabled = true;
+      const data = await postJson(`/api/add_to_cart/${id}`);
+      btn.disabled = false;
+      if (data && data.ok) {
+        updateUI(data.counts || {}, data.cart_count || 0, data.cart_total || 0);
+      } else {
+        alert("Could not add item to cart. Are you logged in?");
+      }
+    });
+  });
+
+  document.querySelectorAll('.remove-one-btn').forEach(btn => {
+    btn.addEventListener('click', async function() {
+      const id = btn.dataset.pcId;
+      btn.disabled = true;
+      const data = await postJson(`/api/remove_one_from_cart/${id}`);
+      btn.disabled = false;
+      if (data && data.ok) {
+        updateUI(data.counts || {}, data.cart_count || 0, data.cart_total || 0);
+      } else {
+        alert("Could not remove item.");
+      }
+    });
+  });
+});
+</script>
 
 {% endblock %}
