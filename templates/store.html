@@ -1,66 +1,53 @@
 {% extends "base.html" %}
-
 {% block title %}Store - Your PC{% endblock %}
 
 {% block content %}
-<h2 style="text-align:center; font-family:'Bahnschrift SemiBold', sans-serif; font-size:32px; margin-bottom:30px;">
-    Prebuilt PCs Store
-</h2>
-<div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(300px, 1fr)); gap:20px;">
-    {% for pc in prebuilds %}
-    <div class="pc-card">
-        <img src="{{ url_for('static', filename=pc.image) }}" alt="{{ pc.name }}">
-        <h3>{{ pc.name }}</h3>
-        <p>₹{{ pc.price }}</p>
-        <ul style="text-align:left; font-size:14px;">
-            {% for spec in pc.specs %}
-            <li>{{ spec }}</li>
-            {% endfor %}
-        </ul>
-        <a href="/add_to_cart/{{ pc.id }}" class="cart-btn">Add to Cart</a>
-    </div>
-    {% endfor %}
+<h2 style="text-align:center; margin-bottom:12px;">Prebuilt PCs</h2>
+
+<!-- Cart summary at top -->
+<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+  <div>
+    <strong>Items in cart:</strong> {{ cart_count }}
+  </div>
+  <div>
+    <strong>Total:</strong> ₹{{ cart_total }}
+  </div>
 </div>
 
-<style>
-.pc-card {
-    border: 1px solid #ccc;
-    border-radius: 10px;
-    padding: 15px;
-    text-align: center;
-    transition: transform 0.3s, box-shadow 0.3s;
-}
-.pc-card img {
-    width: 100%;
-    height: 200px;
-    object-fit: cover;
-    border-radius: 8px;
-}
-.pc-card h3 {
-    font-family: 'Bahnschrift SemiBold', sans-serif;
-    margin: 15px 0;
-}
-.pc-card p {
-    font-size: 18px;
-    font-weight: bold;
-    color: #007bff;
-}
-.pc-card:hover {
-    transform: translateY(-8px);
-    box-shadow: 0 8px 20px rgba(0,0,0,0.2);
-}
-.cart-btn {
-    display: inline-block;
-    margin-top: 10px;
-    background: #28a745;
-    color: white;
-    padding: 10px 20px;
-    text-decoration: none;
-    border-radius: 6px;
-    transition: background 0.3s;
-}
-.cart-btn:hover {
-    background: #218838;
-}
-</style>
+<div class="prebuild-grid">
+  {% for pc in prebuilds %}
+  <div class="card">
+    <img src="{{ url_for('static', filename=pc.image) }}" alt="{{ pc.name }}">
+    <div class="card-body">
+      <div class="card-title">{{ pc.name }}</div>
+      <div class="card-price">₹{{ pc.price }}</div>
+      <p style="margin:8px 0; color:var(--muted); font-size:14px;">
+        {% for s in pc.specs[:3] %}
+          <div>{{ s }}</div>
+        {% endfor %}
+        <small>...more specs on product page</small>
+      </p>
+
+      <!-- Add to cart form (POST) -->
+      <form method="POST" action="{{ url_for('add_to_cart', pc_id=pc.id) }}">
+        <button type="submit" class="btn" style="width:100%;">Add to Cart</button>
+      </form>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+
+<!-- Proceed button fixed at bottom of store page -->
+<div style="margin-top:24px; text-align:center;">
+  {% if cart_count > 0 %}
+    <a href="{{ url_for('shipping') }}" class="btn" style="padding:12px 24px; font-size:16px;">
+      Proceed to Checkout ({{ cart_count }} item{% if cart_count > 1 %}s{% endif %})
+    </a>
+  {% else %}
+    <button class="btn" style="padding:12px 24px; font-size:16px;" disabled>
+      Your cart is empty — add items to proceed
+    </button>
+  {% endif %}
+</div>
+
 {% endblock %}

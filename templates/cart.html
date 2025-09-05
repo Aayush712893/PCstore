@@ -3,33 +3,89 @@
 {% block title %}Cart - Your PC{% endblock %}
 
 {% block content %}
-    <h1>🛒 Your Shopping Cart</h1>
+<h1 style="text-align:center; margin-bottom:18px;">🛒 Your Shopping Cart</h1>
 
-    {% if cart %}
-        <table border="1" cellspacing="0" cellpadding="10" style="margin: auto;">
-            <tr>
-                <th>Product</th>
-                <th>Specs</th>
-                <th>Price</th>
-                <th>Action</th>
-            </tr>
-            {% for item in cart %}
-            <tr>
-                <td>{{ item.name }}</td>
-                <td>{{ item.specs }}</td>
-                <td>₹{{ item.price }}</td>
-                <td>
-                    <a href="{{ url_for('remove_from_cart', index=loop.index0) }}">
-                        <button>Remove</button>
-                    </a>
-                </td>
-            </tr>
-            {% endfor %}
-        </table>
+{% if cart and cart|length > 0 %}
+  <div style="overflow-x:auto;">
+    <table style="width:100%; border-collapse:collapse;">
+      <thead>
+        <tr style="text-align:left; border-bottom:1px solid var(--border);">
+          <th style="padding:12px;">Product</th>
+          <th style="padding:12px; width:40%;">Specs</th>
+          <th style="padding:12px; text-align:right;">Price (₹)</th>
+          <th style="padding:12px; text-align:center;">Action</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for item in cart %}
+        <tr style="border-bottom:1px solid var(--border);">
+          <td style="padding:12px; vertical-align:top;">
+            <div style="font-weight:600;">{{ item.name }}</div>
+            {% if item.id %}
+              <div style="color:var(--muted); font-size:13px;">Product ID: {{ item.id }}</div>
+            {% endif %}
+          </td>
 
-        <p><strong>Total:</strong> ₹{{ total }}</p>
-        <a href="{{ url_for('checkout') }}"><button style="background: green;">Proceed to Checkout</button></a>
-    {% else %}
-        <p>Your cart is empty. Add some PCs from the <a href="/store">store</a>.</p>
-    {% endif %}
+          <td style="padding:12px; vertical-align:top;">
+            {% if item.specs %}
+              {% if item.specs is string %}
+                <div style="color:var(--muted); font-size:14px;">{{ item.specs }}</div>
+              {% else %}
+                <ul style="margin:0; padding-left:18px; color:var(--muted); font-size:14px;">
+                  {% for s in item.specs %}
+                    <li>{{ s }}</li>
+                  {% endfor %}
+                </ul>
+              {% endif %}
+            {% else %}
+              <div style="color:var(--muted); font-size:14px;">No specs available</div>
+            {% endif %}
+          </td>
+
+          <td style="padding:12px; vertical-align:top; text-align:right; font-weight:700;">
+            ₹{{ item.price }}
+          </td>
+
+          <td style="padding:12px; vertical-align:top; text-align:center;">
+            <!-- POST remove form (preferred) -->
+            <form method="POST" action="{{ url_for('remove_from_cart', index=loop.index0) }}" style="display:inline;">
+              <button type="submit" style="padding:8px 10px; border-radius:8px; border:0; background:#ef4444; color:white;">
+                Remove
+              </button>
+            </form>
+
+            <!-- Fallback GET (keeps compatibility if your route uses GET) -->
+            <noscript style="display:block; margin-top:6px;">
+              <a href="{{ url_for('remove_from_cart', index=loop.index0) }}">
+                <button style="padding:6px 8px; margin-top:6px;">Remove (no-js)</button>
+              </a>
+            </noscript>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; margin-top:18px;">
+    <div style="font-size:18px; font-weight:700;">
+      Total: ₹{{ total }}
+    </div>
+
+    <div style="display:flex; gap:12px; align-items:center; margin-top:8px;">
+      <a href="{{ url_for('store') }}" class="btn alt" style="padding:10px 16px;">Continue Shopping</a>
+
+      <!-- Proceed to shipping (start checkout flow) -->
+      <a href="{{ url_for('shipping') }}" class="btn" style="padding:10px 16px;">
+        Proceed to Shipping & Checkout
+        <span style="margin-left:8px; font-weight:600;">({{ cart|length }} item{% if cart|length > 1 %}s{% endif %})</span>
+      </a>
+    </div>
+  </div>
+
+{% else %}
+  <p style="text-align:center; color:var(--muted); margin-top:36px;">
+    Your cart is empty. Browse our <a href="{{ url_for('store') }}">store</a> and add prebuilt PCs.
+  </p>
+{% endif %}
 {% endblock %}

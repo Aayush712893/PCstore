@@ -329,17 +329,34 @@ def store():
     # store is visible without login
     return render_template("store.html", prebuilds=prebuilds)
 
-@app.route("/add_to_cart/<int:pc_id>")
+# Replace your existing add_to_cart route with this one
+@app.route("/add_to_cart/<int:pc_id>", methods=["POST"])
 @login_required
 def add_to_cart(pc_id):
+    # ensure cart exists
     cart = session.get("cart", [])
+    # find the pc by id and append a lightweight item (id, name, price)
     for pc in prebuilds:
         if pc["id"] == pc_id:
-            cart.append(pc)
+            cart.append({"id": pc["id"], "name": pc["name"], "price": pc["price"]})
             break
     session["cart"] = cart
-    # 👉 go collect shipping details next
-    return redirect(url_for("shipping"))
+    # Redirect back to store so user can continue shopping
+    return redirect(url_for("store"))
+
+@app.context_processor
+def inject_cart_info():
+    cart = session.get("cart", [])
+    return {"cart_count": len(cart), "cart_total": sum(item["price"] for item in cart)}
+
+@app.route("/remove_from_cart/<int:index>", methods=["POST"])
+@login_required
+def remove_from_cart(index):
+    cart = session.get("cart", [])
+    if 0 <= index < len(cart):
+        cart.pop(index)
+    session["cart"] = cart
+    return redirect(url_for("cart"))
 
 @app.route("/shipping", methods=["GET", "POST"])
 @login_required
