@@ -2,9 +2,10 @@ from flask import Flask, render_template, session, redirect, url_for, request, a
 import os
 import sqlite3
 from functools import wraps
-import json
 from werkzeug.security import generate_password_hash, check_password_hash
 import traceback, time
+import json 
+from flask import jsonify
 
 app = Flask(__name__)
 app.secret_key = "mysecretkey"  # Needed for sessions
@@ -586,61 +587,91 @@ def register():
 @admin_required
 def admin():
     try:
-        # show which DB file we're using (helpful for Render)
         print("DEBUG: admin requested; DB_PATH =", DB_PATH)
-
         with get_db() as conn:
             c = conn.cursor()
-            # list tables to ensure orders exist
+
+            # List tables
             c.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;")
             tables = [r[0] for r in c.fetchall()]
             print("DEBUG: tables in DB:", tables)
 
-            # fetch orders (rows come as sqlite3.Row if get_db configured row_factory)
+            # Fetch orders rows
             c.execute("SELECT id, email, name, address, phone, items_json, total FROM orders ORDER BY id DESC")
             rows = c.fetchall()
+            print("DEBUG: fetched orders count:", len(rows))
 
+            # Convert rows into simple dicts for template
             orders = []
             for r in rows:
                 # r may be sqlite3.Row or tuple
                 try:
-                    items_json = r["items_json"] if isinstance(r, dict) or hasattr(r, "keys") else r[5]
+                    oid = r["id"]
+                    email = r["email"]
+                    name = r["name"]
+                    address = r["address"]
+                    phone = r["phone"]
+                    items_json = r["items_json"]
+                    total = r["total"]
                 except Exception:
-                    # fallback positional index
-                    items_json = r[5] if len(r) > 5 else None
+                    oid, email, name, address, phone, items_json, total = r
 
+                # Try parsing items_json safely
                 parsed_items = []
                 if items_json:
                     try:
                         parsed_items = json.loads(items_json)
                     except Exception as e:
-                        # log but continue; keep the raw string for display
-                        print(f"WARNING: failed to parse items_json for order id {r[0] if hasattr(r, '__getitem__') else 'unknown'}:", e)
-                        parsed_items = ["(invalid items_json)"]
+                        print(f"WARNING: could not parse items_json for order {oid}:", e)
+                        parsed_items = [items_json]
+
                 orders.append({
-                    "id": r["id"] if hasattr(r, "keys") else r[0],
-                    "email": r["email"] if hasattr(r, "keys") else r[1],
-                    "name": r["name"] if hasattr(r, "keys") else r[2],
-                    "address": r["address"] if hasattr(r, "keys") else r[3],
-                    "phone": r["phone"] if hasattr(r, "keys") else r[4],
+                    "id": oid,
+                    "email": email,
+                    "name": name,
+                    "address": address,
+                    "phone": phone,
                     "items": parsed_items,
                     "raw_items_json": items_json,
-                    "total": r["total"] if hasattr(r, "keys") else r[6],
+                    "total": total
                 })
 
-        # render admin page; if you don't have an admin.html yet, render a simple template
-        return render_template("admin.html", builds=orders)
+            # Log a couple of sample orders for debugging
+            for i, o in enumerate(orders[:5]):
+                print(f"DEBUG: order sample {i}:", o)
+
+        # Render admin template — the template should iterate `orders`
+        return render_template("admin.html", orders=orders)
+
     except Exception as exc:
-        # log full traceback to server logs
         print("ERROR in /admin handler:", exc)
         traceback.print_exc()
+        # User-friendly message (no secrets)
+        return "Admin page error — check server logs", 500
 
-        # show a short helpful message to the browser (do NOT leak secrets)
-        error_message = "An error occurred while loading admin data. Check server logs for details."
-        # Optionally include a small hint for you:
-        hint = "Hint: check DB_PATH, table 'orders' and items_json formatting."
-        return f"<h2>{error_message}</h2><p>{hint}</p>", 500
-    
+@app.route("/admin/debug")
+@admin_required
+def admin_debug():
+    try:
+        with get_db() as conn:
+            c = conn.cursor()
+            c.execute("SELECT COUNT(*) FROM orders")
+            count = c.fetchone()[0]
+            c.execute("SELECT id, email, name, address, phone, length(items_json), total FROM orders ORDER BY id DESC LIMIT 10")
+            rows = c.fetchall()
+
+        # convert rows into plain lists for JSON friendliness
+        recent = [list(r) for r in rows]
+        return jsonify({
+            "db_path": DB_PATH,
+            "orders_count": count,
+            "recent": recent
+        })
+    except Exception as e:
+        print("ERROR in /admin/debug:", e)
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
 @app.route("/admin/initdb")
 @admin_required
 def admin_initdb():
