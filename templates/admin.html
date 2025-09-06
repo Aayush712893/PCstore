@@ -53,7 +53,7 @@
 
 <!-- Orders Section -->
 <section style="margin-top:32px;">
-  <h3>Orders (Billing & Shipping)</h3>
+  <h3>Orders (Billing &amp; Shipping)</h3>
   {% if orders and orders|length > 0 %}
   <div style="overflow:auto;">
     <table>
@@ -77,11 +77,33 @@
           <td style="max-width:300px; white-space:pre-wrap;">{{ o.address }}</td>
           <td>{{ o.phone }}</td>
           <td>{{ o.total }}</td>
-          <td style="max-width:360px;">
-            {% if o.items and o.items|length > 0 %}
+          <td style="max-width:360px; vertical-align: top;">
+            {# Prefer items_list (set by server). Fall back to items if present. Use bracket lookup to avoid attribute collision. #}
+            {% if ('items_list' in o) %}
+              {% set items = o['items_list'] %}
+            {% elif ('items' in o) %}
+              {% set items = o['items'] %}
+            {% else %}
+              {% set items = [] %}
+            {% endif %}
+
+            {% if items and items|length > 0 %}
               <ul style="margin:0; padding-left:18px;">
-                {% for item in o.items %}
-                <li>{{ item.name }} — ₹{{ item.price }}</li>
+                {% for item in items %}
+                  <li style="margin-bottom:8px;">
+                    <strong>{{ item.get('name') if item is mapping else item }}</strong>
+                    {% if item.get('price') if item is mapping else false %}
+                      — ₹{{ item.get('price') }}
+                    {% endif %}
+
+                    {% if item.get('specs') if item is mapping else false %}
+                      <div style="font-size:0.9em; color:#666; margin-top:4px;">
+                        {% for s in item.get('specs') %}
+                          <div>{{ s }}</div>
+                        {% endfor %}
+                      </div>
+                    {% endif %}
+                  </li>
                 {% endfor %}
               </ul>
             {% else %}
