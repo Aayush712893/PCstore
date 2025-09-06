@@ -4,6 +4,7 @@ import sqlite3
 from functools import wraps
 import json
 from werkzeug.security import generate_password_hash, check_password_hash
+import traceback, time
 
 app = Flask(__name__)
 app.secret_key = "mysecretkey"  # Needed for sessions
@@ -403,8 +404,8 @@ def api_remove_one_from_cart(pc_id):
 @app.route("/shipping", methods=["GET", "POST"])
 @login_required
 def shipping():
+    # If cart empty, send user to store
     if not session.get("cart"):
-        # If cart is empty, send user to store first
         return redirect(url_for("store"))
 
     error = None
@@ -415,10 +416,61 @@ def shipping():
 
         if not name or not address or not phone:
             error = "Please fill out all fields."
-        else:
-            session["shipping"] = {"name": name, "address": address, "phone": phone}
-            return redirect(url_for("checkout"))
+            return render_template("shipping.html", error=error)
 
+        # Save into session then proceed to checkout
+        session["shipping"] = {"name": name, "address": address, "phone": phone}
+
+        # ---- DEBUG & DB INSERT BLOCK START ----
+        # This will log what is being stored and write the order into DB
+        print(f"DEBUG: checkout called at {time.strftime('%Y-%m-%d %H:%M:%S')}")
+        print("DEBUG: session email:", session.get("email"))
+        print("DEBUG: cart:", session.get("cart"))
+        print("DEBUG: shipping:", session.get("shipping"))
+
+        try:
+            cart = session.get("cart", [])
+            shipping_info = session.get("shipping", {})
+            total = sum(item.get("price", 0) for item in cart)
+
+            if cart and shipping_info:
+                with get_db() as conn:
+                    c = conn.cursor()
+                    c.execute("""
+                        CREATE TABLE IF NOT EXISTS orders (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            email TEXT,
+                            name TEXT,
+                            address TEXT,
+                            phone TEXT,
+                            items_json TEXT,
+                            total INTEGER
+                        )
+                    """)
+                    c.execute("""
+                        INSERT INTO orders (email, name, address, phone, items_json, total)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                    """, (
+                        session.get("email"),
+                        shipping_info.get("name"),
+                        shipping_info.get("address"),
+                        shipping_info.get("phone"),
+                        json.dumps(cart),
+                        total
+                    ))
+                    conn.commit()
+                    print("DEBUG: order inserted, lastrowid:", c.lastrowid)
+            else:
+                print("DEBUG: no cart or no shipping - skipping DB insert")
+        except Exception as e:
+            print("ERROR saving order:", e)
+            traceback.print_exc()
+        # ---- DEBUG & DB INSERT BLOCK END ----
+
+        # after saving, clear cart/shipping or redirect to preview/checkout
+        return redirect(url_for("checkout"))
+
+    # GET: render the shipping form
     return render_template("shipping.html", error=error)
 
 @app.route("/cart")
