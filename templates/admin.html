@@ -78,7 +78,7 @@
           <td>{{ o.phone }}</td>
           <td>{{ o.total }}</td>
           <td style="max-width:360px; vertical-align: top;">
-            {# Prefer items_list (set by server). Fall back to items if present. Use bracket lookup to avoid attribute collision. #}
+            {# Prefer items_list (server sets this). Fall back to items. Use bracket lookup to avoid attribute collision. #}
             {% if ('items_list' in o) %}
               {% set items = o['items_list'] %}
             {% elif ('items' in o) %}
@@ -91,17 +91,22 @@
               <ul style="margin:0; padding-left:18px;">
                 {% for item in items %}
                   <li style="margin-bottom:8px;">
-                    <strong>{{ item.get('name') if item is mapping else item }}</strong>
-                    {% if item.get('price') if item is mapping else false %}
-                      — ₹{{ item.get('price') }}
-                    {% endif %}
+                    {# If item is a mapping (dict), use .get safely; otherwise print item itself #}
+                    {% if item is mapping %}
+                      <strong>{{ item.get('name', '(no name)') }}</strong>
+                      {% if item.get('price') %}
+                        — ₹{{ item.get('price') }}
+                      {% endif %}
 
-                    {% if item.get('specs') if item is mapping else false %}
-                      <div style="font-size:0.9em; color:#666; margin-top:4px;">
-                        {% for s in item.get('specs') %}
-                          <div>{{ s }}</div>
-                        {% endfor %}
-                      </div>
+                      {% if item.get('specs') %}
+                        <div style="font-size:0.9em; color:#666; margin-top:4px;">
+                          {% for s in item.get('specs') %}
+                            <div>{{ s }}</div>
+                          {% endfor %}
+                        </div>
+                      {% endif %}
+                    {% else %}
+                      {{ item }}
                     {% endif %}
                   </li>
                 {% endfor %}
