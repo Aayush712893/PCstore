@@ -1,11 +1,12 @@
 from flask import Flask, render_template, session, redirect, url_for, request, abort
-import os
-import sqlite3
+from flask import jsonify
 from functools import wraps
 from werkzeug.security import generate_password_hash, check_password_hash
+import os
+import sqlite3
 import traceback, time
 import json 
-from flask import jsonify
+
 
 app = Flask(__name__)
 app.secret_key = "mysecretkey"  # Needed for sessions
@@ -631,7 +632,8 @@ def admin():
                     "name": name,
                     "address": address,
                     "phone": phone,
-                    "items": parsed_items,
+                    # renamed to avoid colliding with dict.items()
+                    "items_list": parsed_items,
                     "raw_items_json": items_json,
                     "total": total
                 })
