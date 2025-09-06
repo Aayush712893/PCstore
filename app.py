@@ -585,37 +585,62 @@ def register():
 @app.route("/admin")
 @admin_required
 def admin():
-    create_tables()
-    create_orders_table()
+    try:
+        # show which DB file we're using (helpful for Render)
+        print("DEBUG: admin requested; DB_PATH =", DB_PATH)
 
-    with get_db() as conn:
-        c = conn.cursor()
-        c.execute("""
-            SELECT id, email, brand, processor, motherboard, ram, ssd, gpu, psu, cooling, aio
-            FROM builds ORDER BY id DESC
-        """)
-        builds = c.fetchall()
+        with get_db() as conn:
+            c = conn.cursor()
+            # list tables to ensure orders exist
+            c.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;")
+            tables = [r[0] for r in c.fetchall()]
+            print("DEBUG: tables in DB:", tables)
 
-    with get_db() as conn:
-        c = conn.cursor()
-        c.execute("""
-            SELECT id, email, name, address, phone, items_json, total
-            FROM orders ORDER BY id DESC
-        """)
-        orders = c.fetchall()
+            # fetch orders (rows come as sqlite3.Row if get_db configured row_factory)
+            c.execute("SELECT id, email, name, address, phone, items_json, total FROM orders ORDER BY id DESC")
+            rows = c.fetchall()
 
-    def rowdict(row): return {k: row[k] for k in row.keys()}
-    import json
-    builds_list = [rowdict(r) for r in builds]
-    orders_list = []
-    for r in orders:
-        d = rowdict(r)
-        try: d["items"] = json.loads(d.get("items_json") or "[]")
-        except: d["items"] = []
-        orders_list.append(d)
+            orders = []
+            for r in rows:
+                # r may be sqlite3.Row or tuple
+                try:
+                    items_json = r["items_json"] if isinstance(r, dict) or hasattr(r, "keys") else r[5]
+                except Exception:
+                    # fallback positional index
+                    items_json = r[5] if len(r) > 5 else None
 
-    return render_template("admin.html", builds=builds_list, orders=orders_list)
+                parsed_items = []
+                if items_json:
+                    try:
+                        parsed_items = json.loads(items_json)
+                    except Exception as e:
+                        # log but continue; keep the raw string for display
+                        print(f"WARNING: failed to parse items_json for order id {r[0] if hasattr(r, '__getitem__') else 'unknown'}:", e)
+                        parsed_items = ["(invalid items_json)"]
+                orders.append({
+                    "id": r["id"] if hasattr(r, "keys") else r[0],
+                    "email": r["email"] if hasattr(r, "keys") else r[1],
+                    "name": r["name"] if hasattr(r, "keys") else r[2],
+                    "address": r["address"] if hasattr(r, "keys") else r[3],
+                    "phone": r["phone"] if hasattr(r, "keys") else r[4],
+                    "items": parsed_items,
+                    "raw_items_json": items_json,
+                    "total": r["total"] if hasattr(r, "keys") else r[6],
+                })
 
+        # render admin page; if you don't have an admin.html yet, render a simple template
+        return render_template("admin.html", builds=orders)
+    except Exception as exc:
+        # log full traceback to server logs
+        print("ERROR in /admin handler:", exc)
+        traceback.print_exc()
+
+        # show a short helpful message to the browser (do NOT leak secrets)
+        error_message = "An error occurred while loading admin data. Check server logs for details."
+        # Optionally include a small hint for you:
+        hint = "Hint: check DB_PATH, table 'orders' and items_json formatting."
+        return f"<h2>{error_message}</h2><p>{hint}</p>", 500
+    
 @app.route("/admin/initdb")
 @admin_required
 def admin_initdb():
