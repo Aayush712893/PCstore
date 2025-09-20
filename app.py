@@ -172,31 +172,56 @@ def validate_login(email: str, password: str) -> str:
     _, _, pw_hash = row
     return "ok" if check_password_hash(pw_hash, password) else "bad_password"
 
-def save_build_to_db(build: dict, email: str):
-    with get_db() as conn:
-        c = conn.cursor()
-        c.execute("""
-            INSERT INTO builds (
-                email, customer_name, whatsapp, comments,
-                brand, processor, motherboard, ram, ssd, gpu, psu, cooling, aio
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            email,
-            build.get("customer_name"),
-            build.get("whatsapp"),
-            build.get("comments"),
-            build.get("brand"),
-            build.get("processor"),
-            build.get("motherboard"),
-            build.get("ram"),
-            build.get("ssd"),
-            build.get("gpu"),
-            build.get("psu"),
-            build.get("cooling"),
-            build.get("aio"),
-        ))
-        conn.commit()
+def save_build_to_db(build: dict, email: str | None):
+    import time, traceback
+    try:
+        print(f"DEBUG: save_build_to_db called at {time.strftime('%Y-%m-%d %H:%M:%S')}")
+        print("DEBUG: DB_PATH used by app:", DB_PATH)
+        print("DEBUG: build payload:", build)
+        print("DEBUG: email:", email)
+        with get_db() as conn:
+            c = conn.cursor()
+            c.execute("""CREATE TABLE IF NOT EXISTS builds (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                email TEXT,
+                customer_name TEXT,
+                whatsapp TEXT,
+                comments TEXT,
+                brand TEXT,
+                processor TEXT,
+                motherboard TEXT,
+                ram TEXT,
+                ssd TEXT,
+                gpu TEXT,
+                psu TEXT,
+                cooling TEXT,
+                aio TEXT
+            )""")
+            c.execute("""
+                INSERT INTO builds (
+                    email, customer_name, whatsapp, comments,
+                    brand, processor, motherboard, ram, ssd, gpu, psu, cooling, aio
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                email,
+                build.get("customer_name"),
+                build.get("whatsapp"),
+                build.get("comments"),
+                build.get("brand"),
+                build.get("processor"),
+                build.get("motherboard"),
+                build.get("ram"),
+                build.get("ssd"),
+                build.get("gpu"),
+                build.get("psu"),
+                build.get("cooling"),
+                build.get("aio"),
+            ))
+            conn.commit()
+            print("DEBUG: build inserted, lastrowid:", c.lastrowid)
+    except Exception as e:
+        print("ERROR saving build:", e)
+        traceback.print_exc()
 
 # ---------- Auth guards ----------
 def login_required(view_func):
@@ -304,13 +329,11 @@ def home():
 @app.route("/build", methods=["GET", "POST"])
 def build():
     if request.method == "POST":
-        if not session.get("logged_in"):
-            return redirect(url_for("login", next=url_for("build")))
-
+        # collect fields from form (including name/whatsapp/comments)
         session["my_build"] = {
-            "customer_name": request.form.get("customer_name", "").strip(),
-            "whatsapp": request.form.get("whatsapp", "").strip(),
-            "comments": request.form.get("comments", "").strip(),
+            "customer_name": request.form.get("customer_name"),
+            "whatsapp": request.form.get("whatsapp"),
+            "comments": request.form.get("comments"),
             "brand": request.form.get("brand"),
             "processor": request.form.get("processor"),
             "motherboard": request.form.get("motherboard"),
@@ -321,15 +344,16 @@ def build():
             "cooling": request.form.get("cooling"),
             "aio": request.form.get("aio"),
         }
+        print("DEBUG: Build received in /build:", session["my_build"])
 
-        # ✅ Optional minimal check for WhatsApp number
-        wa = session["my_build"]["whatsapp"]
-        if not wa or not wa.replace("+", "").replace(" ", "").isdigit():
-            error = "Please enter a valid WhatsApp number."
-            return render_template("build.html", error=error)
+        # require login to submit
+        if not session.get("logged_in"):
+            return redirect(url_for("login", next=url_for("build")))
 
-        # Save with the logged-in email
-        save_build_to_db(session["my_build"], session["email"])
+        # save using consistent DB helper
+        save_build_to_db(session["my_build"], session.get("email"))
+        print("DEBUG: after save_build_to_db")
+
         return redirect(url_for("preview_build"))
 
     return render_template("build.html")
@@ -592,63 +616,65 @@ def admin():
         with get_db() as conn:
             c = conn.cursor()
 
-            # List tables
-            c.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;")
-            tables = [r[0] for r in c.fetchall()]
-            print("DEBUG: tables in DB:", tables)
+            # Fetch builds
+            c.execute("SELECT id, email, customer_name, whatsapp, comments, brand, processor, motherboard, ram, ssd, gpu, psu, cooling, aio FROM builds ORDER BY id DESC")
+            build_rows = c.fetchall()
+            print("DEBUG: builds fetched count:", len(build_rows))
+            builds = []
+            for r in build_rows:
+                try:
+                    b = {
+                        "id": r["id"],
+                        "email": r["email"],
+                        "customer_name": r["customer_name"],
+                        "whatsapp": r["whatsapp"],
+                        "comments": r["comments"],
+                        "brand": r["brand"],
+                        "processor": r["processor"],
+                        "motherboard": r["motherboard"],
+                        "ram": r["ram"],
+                        "ssd": r["ssd"],
+                        "gpu": r["gpu"],
+                        "psu": r["psu"],
+                        "cooling": r["cooling"],
+                        "aio": r["aio"],
+                    }
+                except Exception:
+                    # fallback if row is tuple
+                    b = {
+                        "id": r[0], "email": r[1], "customer_name": r[2], "whatsapp": r[3], "comments": r[4],
+                        "brand": r[5], "processor": r[6], "motherboard": r[7], "ram": r[8], "ssd": r[9],
+                        "gpu": r[10], "psu": r[11], "cooling": r[12], "aio": r[13]
+                    }
+                builds.append(b)
 
-            # Fetch orders rows
+            # Fetch orders as before (so admin shows both)
             c.execute("SELECT id, email, name, address, phone, items_json, total FROM orders ORDER BY id DESC")
             rows = c.fetchall()
-            print("DEBUG: fetched orders count:", len(rows))
-
-            # Convert rows into simple dicts for template
             orders = []
             for r in rows:
-                # r may be sqlite3.Row or tuple
                 try:
-                    oid = r["id"]
-                    email = r["email"]
-                    name = r["name"]
-                    address = r["address"]
-                    phone = r["phone"]
-                    items_json = r["items_json"]
-                    total = r["total"]
+                    oid = r["id"]; email = r["email"]; name = r["name"]; address = r["address"]
+                    phone = r["phone"]; items_json = r["items_json"]; total = r["total"]
                 except Exception:
                     oid, email, name, address, phone, items_json, total = r
-
-                # Try parsing items_json safely
                 parsed_items = []
                 if items_json:
                     try:
                         parsed_items = json.loads(items_json)
-                    except Exception as e:
-                        print(f"WARNING: could not parse items_json for order {oid}:", e)
+                    except Exception:
                         parsed_items = [items_json]
-
                 orders.append({
-                    "id": oid,
-                    "email": email,
-                    "name": name,
-                    "address": address,
-                    "phone": phone,
-                    # renamed to avoid colliding with dict.items()
-                    "items_list": parsed_items,
-                    "raw_items_json": items_json,
-                    "total": total
+                    "id": oid, "email": email, "name": name, "address": address,
+                    "phone": phone, "items_list": parsed_items, "raw_items_json": items_json, "total": total
                 })
 
-            # Log a couple of sample orders for debugging
-            for i, o in enumerate(orders[:5]):
-                print(f"DEBUG: order sample {i}:", o)
-
-        # Render admin template — the template should iterate `orders`
-        return render_template("admin.html", orders=orders)
+        print("DEBUG: admin returning builds_count:", len(builds), "orders_count:", len(orders))
+        return render_template("admin.html", builds=builds, orders=orders)
 
     except Exception as exc:
         print("ERROR in /admin handler:", exc)
         traceback.print_exc()
-        # User-friendly message (no secrets)
         return "Admin page error — check server logs", 500
 
 @app.route("/admin/debug")
@@ -657,22 +683,13 @@ def admin_debug():
     try:
         with get_db() as conn:
             c = conn.cursor()
-            c.execute("SELECT COUNT(*) FROM orders")
-            count = c.fetchone()[0]
-            c.execute("SELECT id, email, name, address, phone, length(items_json), total FROM orders ORDER BY id DESC LIMIT 10")
-            rows = c.fetchall()
-
-        # convert rows into plain lists for JSON friendliness
-        recent = [list(r) for r in rows]
-        return jsonify({
-            "db_path": DB_PATH,
-            "orders_count": count,
-            "recent": recent
-        })
+            c.execute("SELECT COUNT(*) FROM builds"); builds_count = c.fetchone()[0]
+            c.execute("SELECT COUNT(*) FROM orders"); orders_count = c.fetchone()[0]
+            c.execute("SELECT id, email, brand, processor FROM builds ORDER BY id DESC LIMIT 5")
+            recent_builds = [list(r) for r in c.fetchall()]
+        return {"db_path": DB_PATH, "builds_count": builds_count, "orders_count": orders_count, "recent_builds": recent_builds}
     except Exception as e:
-        print("ERROR in /admin/debug:", e)
-        traceback.print_exc()
-        return jsonify({"error": str(e)}), 500
+        return {"error": str(e)}, 500
 
 @app.route("/admin/initdb")
 @admin_required
