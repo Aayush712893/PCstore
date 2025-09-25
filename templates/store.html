@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+
 {% block title %}Store - Your PC{% endblock %}
 
 {% block content %}
@@ -17,7 +18,7 @@
 <div class="prebuild-grid">
   {% for pc in prebuilds %}
   <div class="card" data-pc-id="{{ pc.id }}">
-    <img src="{{ url_for('static', filename=pc.image) }}" alt="{{ pc.name }}">
+    <img src="{{ url_for('static', filename=pc.image) }}" alt="{{ pc.name }}" style="max-width:100%; height:auto;">
     <div class="card-body">
       <div class="card-title">{{ pc.name }}</div>
       <div class="card-price">₹{{ pc.price }}</div>
@@ -32,10 +33,22 @@
         </ul>
       </div>
 
+      <!-- STOCK -->
+      {% set stock = pc.get('stock', 0) %}
+      <div style="margin-top:8px;">
+        {% if stock is not none %}
+          {% if stock <= 0 %}
+            <strong style="color:#c23;">Sold out</strong>
+          {% else %}
+            <small>In stock: {{ stock }}</small>
+          {% endif %}
+        {% endif %}
+      </div>
+
       <!-- Buttons: JS-enabled + no-JS fallback -->
       <div style="display:flex; gap:8px; align-items:center; margin-top:10px;">
-        <!-- JS-enabled button (calls API) -->
-        <button class="btn small add-btn" data-pc-id="{{ pc.id }}">＋ Add</button>
+        <!-- JS-enabled button -->
+        <button class="btn small add-btn" data-pc-id="{{ pc.id }}" {% if stock <= 0 %}disabled{% endif %}>＋ Add</button>
 
         <!-- Remove one unit button (JS) -->
         <button class="btn small remove-one-btn" data-pc-id="{{ pc.id }}" {% if (cart_counts.get(pc.id) or 0) == 0 %}disabled{% endif %}>−</button>
@@ -46,7 +59,7 @@
         <!-- No-JS fallback form: submits to server route that redirects to login if needed -->
         <noscript>
           <form method="POST" action="{{ url_for('add_to_cart', pc_id=pc.id) }}" style="display:inline;">
-            <button type="submit" class="btn small" style="margin-left:8px;">Add (no-js)</button>
+            <button type="submit" class="btn small" style="margin-left:8px;" {% if stock <= 0 %}disabled{% endif %}>Add (no-js)</button>
           </form>
         </noscript>
       </div>
@@ -63,37 +76,22 @@
 </div>
 
 <script>
-/*
-  Behavior:
-  - Click + -> POST /api/add_to_cart/<id>
-  - Click − -> POST /api/remove_one_from_cart/<id>
-  - API returns JSON:
-     { ok: true, cart_count: N, counts: { id: qty, ... }, cart_total: total }
-    OR { ok: false, error: "not_logged_in" } with HTTP 401 for unauthenticated.
-  - On not_logged_in -> redirect to /login?next=/store
-*/
-
 async function postJson(url) {
   const resp = await fetch(url, {
     method: "POST",
     headers: { "Accept": "application/json" },
     credentials: "same-origin"
   });
-  // Try parse JSON safely
   let data;
   try { data = await resp.json(); } catch (e) { data = null; }
   return { status: resp.status, json: data };
 }
 
 function updateUI(counts, totalCount, cartTotal) {
-  // header badge(s)
   document.querySelectorAll('.cart-count-badge').forEach(el => el.textContent = totalCount);
-
-  // total
   const totalEl = document.getElementById('cart-total');
   if (totalEl) totalEl.textContent = cartTotal ?? "0";
 
-  // per-card counts + remove button disable/enable
   document.querySelectorAll('.card').forEach(card => {
     const id = Number(card.dataset.pcId);
     const count = counts[id] || 0;
@@ -103,7 +101,6 @@ function updateUI(counts, totalCount, cartTotal) {
     if (removeBtn) removeBtn.disabled = count === 0;
   });
 
-  // proceed button
   const proceedBtn = document.getElementById('proceed-btn');
   const proceedText = document.getElementById('proceed-text');
   if (totalCount > 0) {
@@ -120,7 +117,6 @@ function updateUI(counts, totalCount, cartTotal) {
 }
 
 document.addEventListener('DOMContentLoaded', function() {
-  // wire add buttons
   document.querySelectorAll('.add-btn').forEach(btn => {
     btn.addEventListener('click', async function() {
       const id = btn.dataset.pcId;
@@ -135,15 +131,15 @@ document.addEventListener('DOMContentLoaded', function() {
       }
       if (json && json.ok) {
         updateUI(json.counts || {}, json.cart_count || 0, json.cart_total || 0);
+      } else if (json && json.error === "sold_out") {
+        alert("This item is sold out.");
       } else {
-        // Generic fallback: show an alert and log response
         console.error("Add API response:", status, json);
         alert("Could not add item to cart. Please try again or login.");
       }
     });
   });
 
-  // wire remove-one buttons
   document.querySelectorAll('.remove-one-btn').forEach(btn => {
     btn.addEventListener('click', async function() {
       const id = btn.dataset.pcId;

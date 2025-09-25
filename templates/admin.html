@@ -6,6 +6,46 @@
 <h2 style="margin-bottom:12px;">Admin Dashboard</h2>
 <p style="color:#a8adb7; margin-top:0;">Signed in as: <strong>{{ session.get('email') }}</strong></p>
 
+<!-- Products / Stock Section -->
+<section style="margin-top:16px;">
+  <h3>Products & Stock</h3>
+  {% if products and products|length > 0 %}
+  <div style="overflow:auto;">
+    <table>
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Name</th>
+          <th>Price (₹)</th>
+          <th>Stock</th>
+          <th>Action</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for p in products %}
+        <tr>
+          <td>{{ p.id }}</td>
+          <td style="min-width:220px;">{{ p.name }}</td>
+          <td>{{ p.price }}</td>
+          <td>{{ p.stock }}</td>
+          <td>
+            <!-- Inline update form -->
+            <form method="POST" action="{{ url_for('admin_update_stock') }}" style="display:inline;">
+              <input type="hidden" name="product_id" value="{{ p.id }}">
+              <input name="stock" type="number" min="0" value="{{ p.stock }}" style="width:80px;">
+              <button type="submit" class="btn small">Update</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+    <p>No products found.</p>
+  {% endif %}
+</section>
+
 <!-- Builds Section -->
 <section style="margin-top:24px;">
   <h3>Submitted Build Forms</h3>
@@ -16,15 +56,13 @@
         <tr>
           <th>ID</th>
           <th>User Email</th>
+          <th>Customer Name</th>
+          <th>WhatsApp</th>
           <th>Brand</th>
           <th>Processor</th>
-          <th>Motherboard</th>
           <th>RAM</th>
           <th>SSD</th>
           <th>GPU</th>
-          <th>PSU</th>
-          <th>Cooling</th>
-          <th>AIO</th>
         </tr>
       </thead>
       <tbody>
@@ -32,15 +70,13 @@
         <tr>
           <td>{{ b.id }}</td>
           <td>{{ b.email }}</td>
-          <td>{{ b.brand }}</td>
-          <td>{{ b.processor }}</td>
-          <td>{{ b.motherboard }}</td>
-          <td>{{ b.ram }}</td>
-          <td>{{ b.ssd }}</td>
-          <td>{{ b.gpu }}</td>
-          <td>{{ b.psu }}</td>
-          <td>{{ b.cooling }}</td>
-          <td>{{ b.aio }}</td>
+          <td>{{ b.customer_name or '-' }}</td>
+          <td>{{ b.whatsapp or '-' }}</td>
+          <td>{{ b.brand or '-' }}</td>
+          <td>{{ b.processor or '-' }}</td>
+          <td>{{ b.ram or '-' }}</td>
+          <td>{{ b.ssd or '-' }}</td>
+          <td>{{ b.gpu or '-' }}</td>
         </tr>
         {% endfor %}
       </tbody>
@@ -53,7 +89,7 @@
 
 <!-- Orders Section -->
 <section style="margin-top:32px;">
-  <h3>Orders (Billing &amp; Shipping)</h3>
+  <h3>Orders (Billing & Shipping)</h3>
   {% if orders and orders|length > 0 %}
   <div style="overflow:auto;">
     <table>
@@ -77,38 +113,11 @@
           <td style="max-width:300px; white-space:pre-wrap;">{{ o.address }}</td>
           <td>{{ o.phone }}</td>
           <td>{{ o.total }}</td>
-          <td style="max-width:360px; vertical-align: top;">
-            {# Prefer items_list (server sets this). Fall back to items. Use bracket lookup to avoid attribute collision. #}
-            {% if ('items_list' in o) %}
-              {% set items = o['items_list'] %}
-            {% elif ('items' in o) %}
-              {% set items = o['items'] %}
-            {% else %}
-              {% set items = [] %}
-            {% endif %}
-
-            {% if items and items|length > 0 %}
+          <td style="max-width:360px;">
+            {% if o.items_list and o.items_list|length > 0 %}
               <ul style="margin:0; padding-left:18px;">
-                {% for item in items %}
-                  <li style="margin-bottom:8px;">
-                    {# If item is a mapping (dict), use .get safely; otherwise print item itself #}
-                    {% if item is mapping %}
-                      <strong>{{ item.get('name', '(no name)') }}</strong>
-                      {% if item.get('price') %}
-                        — ₹{{ item.get('price') }}
-                      {% endif %}
-
-                      {% if item.get('specs') %}
-                        <div style="font-size:0.9em; color:#666; margin-top:4px;">
-                          {% for s in item.get('specs') %}
-                            <div>{{ s }}</div>
-                          {% endfor %}
-                        </div>
-                      {% endif %}
-                    {% else %}
-                      {{ item }}
-                    {% endif %}
-                  </li>
+                {% for item in o.items_list %}
+                  <li>{{ item.name }} — ₹{{ item.price }}</li>
                 {% endfor %}
               </ul>
             {% else %}
