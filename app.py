@@ -7,6 +7,9 @@ import sqlite3
 import traceback
 import time
 import json
+import razorpay
+from flask import jsonify
+from decimal import Decimal, ROUND_HALF_UP
 
 app = Flask(__name__)
 app.secret_key = "mysecretkey"  # Needed for sessions
@@ -15,6 +18,25 @@ app.secret_key = "mysecretkey"  # Needed for sessions
 # Default DB path (in production on Render you should mount a persistent disk, e.g. /var/data)
 DB_PATH = os.getenv("DB_PATH", "/var/data/pcstore.db")
 
+# Read keys from environment variables (do NOT hard-code secrets)
+RAZORPAY_KEY_ID = os.getenv("RAZORPAY_KEY_ID")
+RAZORPAY_KEY_SECRET = os.getenv("RAZORPAY_KEY_SECRET")
+
+def _has_payment_keys() -> bool:
+    return bool(RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET)
+
+# Initialize a single global client if keys are present
+rzp_client = None
+if _has_payment_keys():
+    try:
+        rzp_client = razorpay.Client(auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET))
+        print("Razorpay client OK; key_id starts with:", (RAZORPAY_KEY_ID or "")[:6])
+    except Exception as e:
+        rzp_client = None
+        print("ERROR initializing Razorpay client:", e)
+else:
+    print("WARN: Razorpay keys missing. Set RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET.")
+    
 def get_db():
     # Ensure directory exists only if DB_PATH contains a directory
     db_dir = os.path.dirname(DB_PATH)
@@ -98,6 +120,28 @@ def ensure_products_stock_column():
         else:
             print("DB: 'stock' column already present in products.")
 
+def add_test_product():
+    """Insert a test product (₹2) if it doesn't already exist."""
+    with get_db() as conn:
+        c = conn.cursor()
+        c.execute("SELECT id FROM products WHERE id = 9999")
+        if not c.fetchone():
+            c.execute("""
+                INSERT INTO products (id, name, price, image, specs_json, stock)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (
+                9999,
+                "Test Product ₹2",
+                2,
+                "test.jpg",  # make a dummy image in static if you want
+                json.dumps(["This is a test product to check Razorpay"]),
+                10,  # stock = 10
+            ))
+            conn.commit()
+            print("✅ Test product (₹2) inserted.")
+        else:
+            print("ℹ️ Test product already exists.")
+
 def migrate_builds_table():
     """Add optional columns to builds if missing (safe to run multiple times)."""
     with get_db() as conn:
@@ -120,6 +164,7 @@ def migrate_builds_table():
 create_tables()
 ensure_products_stock_column()
 migrate_builds_table()
+add_test_product()
 
 # ---------- User management ----------
 def register_user(email, password):
@@ -289,6 +334,14 @@ prebuilds = [
             "PSU - ASUS TUF Gaming 850W Gold",
             "GPU - NVIDIA RTX 4070 Super"
         ]
+    },
+    {
+        "id": 999,
+        "name": "Razorpay Test Product (₹2)",
+        "price": 2,
+        "image": "test.png",
+        "specs": ["Test purchase - ₹2"],
+        "stock": 99
     }
 ]
 
@@ -570,6 +623,113 @@ def shipping():
         return redirect(url_for("checkout"))
 
     return render_template("shipping.html", error=error)
+
+
+@app.post("/create_payment_order")
+@login_required
+def create_payment_order():
+    if not _has_payment_keys() or rzp_client is None:
+        return jsonify({"error": "Payment keys not configured"}), 400
+
+    data = request.get_json(silent=True) or {}
+    rupees = int(data.get("amount", 0))  # amount in ₹ from frontend
+    if rupees < 1:
+        return jsonify({"error": "Amount must be at least ₹1"}), 400
+
+    amount_paise = rupees * 100
+    try:
+        order = rzp_client.order.create({
+            "amount": amount_paise,
+            "currency": "INR",
+            "receipt": f"rcpt_{int(time.time())}",
+            "payment_capture": 1
+        })
+        return jsonify({
+            "ok": True,
+            "order": order,                  # has id/amount/currency
+            "key_id": RAZORPAY_KEY_ID,      # expose public key to frontend
+            "local_order_id": order.get("id")
+        })
+    except Exception as e:
+        print("ERROR creating Razorpay order:", e)
+        return jsonify({"error": "Could not create payment order"}), 400
+            
+# Verify payment signature called by client after checkout
+@app.route("/verify_payment", methods=["POST"])
+@login_required
+def verify_payment():
+    """
+    Expects JSON:
+    { "razorpay_order_id": "...", "razorpay_payment_id": "...", "razorpay_signature": "...", "local_order_id": 123 }
+    """
+    data = request.get_json() or {}
+    razorpay_order_id = data.get("razorpay_order_id")
+    razorpay_payment_id = data.get("razorpay_payment_id")
+    razorpay_signature = data.get("razorpay_signature")
+    local_order_id = data.get("local_order_id")
+
+    if not (razorpay_order_id and razorpay_payment_id and razorpay_signature and local_order_id):
+        return jsonify({"ok": False, "error": "missing_parameters"}), 400
+
+    try:
+        # verify signature using razorpay util
+        rzp_client.utility.verify_payment_signature({
+            "razorpay_order_id": razorpay_order_id,
+            "razorpay_payment_id": razorpay_payment_id,
+            "razorpay_signature": razorpay_signature
+        })
+    except razorpay.errors.SignatureVerificationError as e:
+        # verification failed
+        return jsonify({"ok": False, "error": "signature_verification_failed"}), 400
+
+    # mark order as paid in DB (update status, store payment id)
+    with get_db() as conn:
+        c = conn.cursor()
+        # ensure columns exist: razorpay_payment_id, paid (you might have to add these via migration)
+        try:
+            c.execute("ALTER TABLE orders ADD COLUMN razorpay_payment_id TEXT")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            c.execute("ALTER TABLE orders ADD COLUMN paid INTEGER DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass
+
+        c.execute("""
+            UPDATE orders
+            SET razorpay_payment_id = ?, paid = 1
+            WHERE id = ? AND razorpay_order_id = ?
+        """, (razorpay_payment_id, local_order_id, razorpay_order_id))
+        conn.commit()
+
+    return jsonify({"ok": True}), 200
+
+@app.post("/payment_success")
+@login_required
+def payment_success():
+    if not _has_payment_keys() or rzp_client is None:
+        return jsonify({"ok": False, "error": "Payment keys not configured"}), 400
+
+    payload = request.get_json(silent=True) or {}
+    params = {
+        "razorpay_order_id": payload.get("razorpay_order_id"),
+        "razorpay_payment_id": payload.get("razorpay_payment_id"),
+        "razorpay_signature": payload.get("razorpay_signature"),
+    }
+    try:
+        rzp_client.utility.verify_payment_signature(params)
+        return jsonify({"ok": True})
+    except Exception as e:
+        print("Payment verification error:", e)
+        return jsonify({"ok": False, "error": "Verification failed"}), 400
+
+@app.get("/_pay_diag")
+@admin_required
+def _pay_diag():
+    return {
+        "has_keys": _has_payment_keys(),
+        "key_id_prefix": (RAZORPAY_KEY_ID[:6] + "****") if RAZORPAY_KEY_ID else None
+    }
 
 @app.route("/cart")
 @login_required

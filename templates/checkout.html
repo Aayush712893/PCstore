@@ -1,22 +1,150 @@
-<!DOCTYPE html>
-<html>
+<!doctype html>
+<html lang="en">
 <head>
-    <title>Checkout</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Checkout</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body>
-    <h1>✅ Checkout Complete</h1>
+  <header>
     <nav>
-        <a href="/">Home</a> |
-        <a href="/build">Build</a> |
-        <a href="/store">Store</a> |
-        <a href="/login">Login</a> |
-        <a href="/cart">Cart</a>
+      <a href="{{ url_for('home') }}">Home</a> |
+      <a href="{{ url_for('build') }}">Build</a> |
+      <a href="{{ url_for('store') }}">Store</a> |
+      <a href="{{ url_for('cart') }}">Cart</a>
     </nav>
+  </header>
 
-    <p>Thank you for your purchase! 🎉</p>
-    <p>Total Paid: <strong>₹{{ total }}</strong></p>
+  <main style="max-width:800px;margin:20px auto;">
+    <h1>Checkout</h1>
 
-    <p><a href="/store">Continue Shopping</a></p>
+    <p>Total: <strong>₹{{ total }}</strong></p>
+
+    <div id="error" role="alert" style="color:red;"></div>
+
+    <button id="pay-btn" class="btn">Pay with Razorpay</button>
+
+    <p style="margin-top:18px;">If you face issues, contact admin: <strong>{{ admin_email }}</strong></p>
+    <noscript><p style="color:#b00;">Enable JavaScript to complete the payment.</p></noscript>
+  </main>
+
+  <!-- Razorpay Checkout -->
+  <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
+
+  <script>
+    const payBtn   = document.getElementById('pay-btn');
+    const errorDiv = document.getElementById('error');
+
+    // Send the amount in RUPEES to the server; server converts to paise.
+    const rupeeTotal = {{ (total or 0)|int }};
+
+    payBtn.addEventListener('click', async () => {
+      payBtn.disabled = true;
+      errorDiv.textContent = "";
+
+      // 1) Create order on your server
+      let resp, data;
+      try {
+        resp = await fetch("{{ url_for('create_payment_order') }}", {
+          method: "POST",
+          credentials: "same-origin",
+          headers: { "Content-Type": "application/json", "Accept": "application/json" },
+          body: JSON.stringify({ amount: rupeeTotal })
+        });
+        data = await resp.json().catch(() => null);
+      } catch (e) {
+        payBtn.disabled = false;
+        errorDiv.textContent = "Network error creating payment order.";
+        return;
+      }
+
+      if (!resp.ok || !data || data.ok === false) {
+        payBtn.disabled = false;
+        errorDiv.textContent = (data && data.error) ? data.error : "Could not create payment order.";
+        return;
+      }
+
+      // Support both response shapes:
+      // A) { ok:true, order:{ id, amount, currency, ... }, key_id:"rzp_xxx", local_order_id:"..." }
+      // B) { key:"rzp_xxx", amount:12345, currency:"INR", order_id:"order_...", local_order_id:"..." }
+      const order         = data.order || {};
+      const key           = data.key_id || data.key;
+      const amountPaise   = (order.amount != null) ? order.amount : data.amount;        // in paise
+      const currency      = order.currency || data.currency || "INR";
+      const orderId       = order.id || data.order_id;
+      const localOrderId  = data.local_order_id || null;
+
+      if (!key || !amountPaise || !orderId) {
+        payBtn.disabled = false;
+        console.error("Bad order payload:", data);
+        errorDiv.textContent = "Payment order is invalid. Please try again.";
+        return;
+      }
+
+      // 2) Open Razorpay Checkout
+      let rzp; // declare in outer scope so we can close in handlers
+      const options = {
+        key: key,
+        amount: amountPaise,           // IN PAISE
+        currency: currency,
+        name: "Your PC Store",
+        description: "Purchase from Your PC Store",
+        order_id: orderId,
+
+        handler: async function (response) {
+          // 3) Verify payment on your server
+          try {
+            const verifyResp = await fetch("{{ url_for('payment_success') }}", {
+              method: "POST",
+              credentials: "same-origin",
+              headers: { "Content-Type": "application/json", "Accept": "application/json" },
+              body: JSON.stringify({
+                razorpay_payment_id: response.razorpay_payment_id,
+                razorpay_order_id:   response.razorpay_order_id,
+                razorpay_signature:  response.razorpay_signature,
+                local_order_id:      localOrderId
+              })
+            });
+
+            const verifyJson = await verifyResp.json().catch(()=>null);
+
+            if (verifyResp.ok && verifyJson && verifyJson.ok) {
+              try { rzp.close(); } catch(e) {}
+              // Redirect to your success/thank-you (here we reuse checkout page which shows success)
+              window.location.href = "{{ url_for('checkout') }}";
+            } else {
+              errorDiv.textContent = (verifyJson && verifyJson.error) ? verifyJson.error : "Payment verification failed.";
+              try { rzp.close(); } catch(e) {}
+              payBtn.disabled = false;
+            }
+          } catch (err) {
+            console.error("verify error:", err);
+            errorDiv.textContent = "Payment verification error.";
+            try { rzp.close(); } catch(e) {}
+            payBtn.disabled = false;
+          }
+        },
+
+        prefill: {
+          email: "{{ session.get('email') or '' }}",
+        },
+
+        theme: { color: "#2E86AB" }
+      };
+
+      rzp = new Razorpay(options);
+
+      // Official failure event from Razorpay
+      rzp.on('payment.failed', function (resp) {
+        const msg = (resp && resp.error && resp.error.description) ? resp.error.description : "Payment failed.";
+        errorDiv.textContent = msg;
+        try { rzp.close(); } catch(e) {}
+        payBtn.disabled = false;
+      });
+
+      rzp.open();
+    });
+  </script>
 </body>
 </html>
