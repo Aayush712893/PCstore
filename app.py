@@ -639,15 +639,47 @@ def create_payment_order():
         rzp_order_id = order["id"]
         print("DEBUG create_payment_order -> rzp_order_id:", rzp_order_id, "amount:", amount_paise)
 
-        # persist mapping (add columns once; ignored if exist)
+        # --- ⬇️ YOUR REQUESTED BLOCK: attach rzp_order_id to latest existing order row (if any) ---
+        try:
+            with get_db() as conn:
+                c = conn.cursor()
+                # add columns if missing (safe to run many times)
+                try:
+                    c.execute("ALTER TABLE orders ADD COLUMN razorpay_order_id TEXT")
+                except sqlite3.OperationalError:
+                    pass
+                try:
+                    c.execute("ALTER TABLE orders ADD COLUMN paid INTEGER DEFAULT 0")
+                except sqlite3.OperationalError:
+                    pass
+
+                # attach razorpay_order_id to the most recent order for this user that has no rzp id yet
+                c.execute("""
+                    UPDATE orders
+                    SET razorpay_order_id = ?
+                    WHERE email = ? AND (razorpay_order_id IS NULL OR razorpay_order_id = '')
+                    ORDER BY id DESC
+                    LIMIT 1
+                """, (order.get("id"), session.get("email")))
+                conn.commit()
+                print("DEBUG: stored razorpay_order_id on latest order for", session.get("email"))
+        except Exception as e:
+            print("WARN: could not store razorpay_order_id:", e)
+        # --- ⬆️ END OF REQUESTED BLOCK ---
+
+        # persist mapping (add columns once; ignored if exist) + create lightweight order row
         with get_db() as conn:
             c = conn.cursor()
-            try: c.execute("ALTER TABLE orders ADD COLUMN razorpay_order_id TEXT")
-            except sqlite3.OperationalError: pass
-            try: c.execute("ALTER TABLE orders ADD COLUMN paid INTEGER DEFAULT 0")
-            except sqlite3.OperationalError: pass
+            try:
+                c.execute("ALTER TABLE orders ADD COLUMN razorpay_order_id TEXT")
+            except sqlite3.OperationalError:
+                pass
+            try:
+                c.execute("ALTER TABLE orders ADD COLUMN paid INTEGER DEFAULT 0")
+            except sqlite3.OperationalError:
+                pass
 
-            # create a lightweight order row if you want a record before shipping form is saved:
+            # create a lightweight order row (separate from the update above) so you always have a record
             c.execute("""
                 INSERT INTO orders (email, name, address, phone, items_json, total, razorpay_order_id, paid)
                 VALUES (?, ?, ?, ?, ?, ?, ?, 0)
@@ -657,7 +689,7 @@ def create_payment_order():
                 (session.get("shipping") or {}).get("address"),
                 (session.get("shipping") or {}).get("phone"),
                 json.dumps(session.get("cart", []), ensure_ascii=False),
-                rupees,
+                rupees,  # store rupees as entered; Razorpay amount is in paise
                 rzp_order_id
             ))
             conn.commit()
@@ -815,54 +847,64 @@ def payment_success():
         return jsonify({"ok": False, "error": "finalization_failed"}), 500
     
 # --- Razorpay redirect callback (from Checkout with redirect:true) ---
-@app.route("/razorpay_callback", methods=["POST"])
+@app.route("/razorpay/callback", methods=["GET", "POST"])
 @login_required
 def razorpay_callback():
+    """
+    Razorpay redirects here when you use redirect:true.
+    We must verify the signature and then show success/failure to the user.
+    """
     if not _has_payment_keys() or rzp_client is None:
         return "Payment keys not configured", 400
 
-    # Razorpay posts form-encoded fields on redirect
-    rzp_order_id   = request.form.get("razorpay_order_id")
-    rzp_payment_id = request.form.get("razorpay_payment_id")
-    rzp_signature  = request.form.get("razorpay_signature")
+    # Razorpay sends either form-encoded (POST) or query string (GET)
+    params = request.form if request.method == "POST" else request.args
 
-    if not (rzp_order_id and rzp_payment_id and rzp_signature):
-        return "Missing parameters", 400
+    razorpay_order_id  = params.get("razorpay_order_id")
+    razorpay_payment_id = params.get("razorpay_payment_id")
+    razorpay_signature  = params.get("razorpay_signature")
+
+    # If user closed app before paying or payment still pending, these may be missing.
+    if not (razorpay_order_id and razorpay_payment_id and razorpay_signature):
+        # Show a friendly "processing/pending" page (or redirect back to checkout)
+        return redirect(url_for("checkout"))
 
     # Verify signature
     try:
         rzp_client.utility.verify_payment_signature({
-            "razorpay_order_id": rzp_order_id,
-            "razorpay_payment_id": rzp_payment_id,
-            "razorpay_signature": rzp_signature
+            "razorpay_order_id": razorpay_order_id,
+            "razorpay_payment_id": razorpay_payment_id,
+            "razorpay_signature": razorpay_signature,
         })
     except Exception as e:
+        # Signature mismatch -> treat as failed
         print("Callback signature verification failed:", e)
-        # Optional: show a failure page instead
-        return redirect(url_for("cart"))
+        # You can flash an error; for now go back to checkout
+        return redirect(url_for("checkout"))
 
-    # Mark order paid in your DB
-    with get_db() as conn:
-        c = conn.cursor()
-        # ensure columns (no-op if already exist)
-        try: c.execute("ALTER TABLE orders ADD COLUMN razorpay_order_id TEXT")
-        except sqlite3.OperationalError: pass
-        try: c.execute("ALTER TABLE orders ADD COLUMN razorpay_payment_id TEXT")
-        except sqlite3.OperationalError: pass
-        try: c.execute("ALTER TABLE orders ADD COLUMN paid INTEGER DEFAULT 0")
-        except sqlite3.OperationalError: pass
+    # Mark paid in DB (best-effort update on last order for this user with this rzp order id)
+    try:
+        with get_db() as conn:
+            c = conn.cursor()
+            # Ensure columns exist (safe no-op after first time)
+            try: c.execute("ALTER TABLE orders ADD COLUMN razorpay_order_id TEXT")
+            except sqlite3.OperationalError: pass
+            try: c.execute("ALTER TABLE orders ADD COLUMN razorpay_payment_id TEXT")
+            except sqlite3.OperationalError: pass
+            try: c.execute("ALTER TABLE orders ADD COLUMN paid INTEGER DEFAULT 0")
+            except sqlite3.OperationalError: pass
 
-        c.execute("""
-            UPDATE orders
-               SET razorpay_order_id = COALESCE(razorpay_order_id, ?),
-                   razorpay_payment_id = ?,
-                   paid = 1
-             WHERE razorpay_order_id = ?
-                OR id = (SELECT id FROM orders WHERE razorpay_order_id IS NULL ORDER BY id DESC LIMIT 1)
-        """, (rzp_order_id, rzp_payment_id, rzp_order_id))
-        conn.commit()
+            # Update matching order if present
+            c.execute("""
+                UPDATE orders
+                SET razorpay_payment_id = ?, paid = 1
+                WHERE razorpay_order_id = ?
+            """, (razorpay_payment_id, razorpay_order_id))
+            conn.commit()
+    except Exception as e:
+        print("DB update on callback failed:", e)
 
-    # Show your success page
+    # Success: send user to your thank-you page
     return redirect(url_for("checkout"))
 
 @app.route("/razorpay_webhook", methods=["POST"])
