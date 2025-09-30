@@ -19,23 +19,26 @@ app.secret_key = "mysecretkey"  # Needed for sessions
 DB_PATH = os.getenv("DB_PATH", "/var/data/pcstore.db")
 
 # Read keys from environment variables (do NOT hard-code secrets)
-RAZORPAY_KEY_ID = os.getenv("RAZORPAY_KEY_ID")
-RAZORPAY_KEY_SECRET = os.getenv("RAZORPAY_KEY_SECRET")
+# --- Razorpay config (LIVE or TEST via environment) ---
+RAZORPAY_KEY_ID = os.getenv("RAZORPAY_KEY_ID")          # e.g. rzp_live_xxx or rzp_test_xxx
+RAZORPAY_KEY_SECRET = os.getenv("RAZORPAY_KEY_SECRET")  # the matching secret
 
-def _has_payment_keys() -> bool:
+def _has_payment_keys():
     return bool(RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET)
 
-# Initialize a single global client if keys are present
 rzp_client = None
 if _has_payment_keys():
     try:
         rzp_client = razorpay.Client(auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET))
-        print("Razorpay client OK; key_id starts with:", (RAZORPAY_KEY_ID or "")[:6])
+        # Optional but helpful: see whether keys are LIVE or TEST from dashboard mode
+        rzp_client.set_app_details({"title": "your-pc-store", "version": "1.0"})
+        print("Razorpay client initialized; key_id:", RAZORPAY_KEY_ID[:8] + "****")
     except Exception as e:
-        rzp_client = None
         print("ERROR initializing Razorpay client:", e)
 else:
     print("WARN: Razorpay keys missing. Set RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET.")
+
+RAZORPAY_WEBHOOK_SECRET = os.getenv("RAZORPAY_WEBHOOK_SECRET", "CHANGE_ME")
     
 def get_db():
     # Ensure directory exists only if DB_PATH contains a directory
@@ -120,6 +123,23 @@ def ensure_products_stock_column():
         else:
             print("DB: 'stock' column already present in products.")
 
+def ensure_orders_payment_columns():
+    with get_db() as conn:
+        c = conn.cursor()
+        c.execute("PRAGMA table_info(orders)")
+        cols = {row[1] for row in c.fetchall()}
+        if "rzp_order_id" not in cols:
+            c.execute("ALTER TABLE orders ADD COLUMN rzp_order_id TEXT")
+        if "rzp_payment_id" not in cols:
+            c.execute("ALTER TABLE orders ADD COLUMN rzp_payment_id TEXT")
+        if "status" not in cols:
+            c.execute("ALTER TABLE orders ADD COLUMN status TEXT DEFAULT 'created'")
+        if "amount_paise" not in cols:
+            c.execute("ALTER TABLE orders ADD COLUMN amount_paise INTEGER")
+        if "paid" not in cols:
+            c.execute("ALTER TABLE orders ADD COLUMN paid INTEGER DEFAULT 0")
+        conn.commit()
+
 def add_test_product():
     """Insert a test product (₹2) if it doesn't already exist."""
     with get_db() as conn:
@@ -164,6 +184,7 @@ def migrate_builds_table():
 create_tables()
 ensure_products_stock_column()
 migrate_builds_table()
+ensure_orders_payment_columns()
 add_test_product()
 
 # ---------- User management ----------
@@ -590,40 +611,11 @@ def shipping():
             error = "Please fill out all fields."
             return render_template("shipping.html", error=error)
 
+        # Save into session only; no DB writes here
         session["shipping"] = {"name": name, "address": address, "phone": phone}
-
-        # Insert order
-        try:
-            cart = session.get("cart", [])
-            shipping_info = session.get("shipping", {})
-            total = sum(item.get("price", 0) for item in cart)
-
-            if cart and shipping_info:
-                with get_db() as conn:
-                    c = conn.cursor()
-                    c.execute("""
-                        INSERT INTO orders (email, name, address, phone, items_json, total)
-                        VALUES (?, ?, ?, ?, ?, ?)
-                    """, (
-                        session.get("email"),
-                        shipping_info.get("name"),
-                        shipping_info.get("address"),
-                        shipping_info.get("phone"),
-                        json.dumps(cart, ensure_ascii=False),
-                        total
-                    ))
-                    conn.commit()
-                    print("DEBUG: order inserted, lastrowid:", c.lastrowid)
-            else:
-                print("DEBUG: no cart or no shipping - skipping DB insert")
-        except Exception as e:
-            print("ERROR saving order:", e)
-            traceback.print_exc()
-
         return redirect(url_for("checkout"))
 
     return render_template("shipping.html", error=error)
-
 
 @app.post("/create_payment_order")
 @login_required
@@ -632,7 +624,7 @@ def create_payment_order():
         return jsonify({"error": "Payment keys not configured"}), 400
 
     data = request.get_json(silent=True) or {}
-    rupees = int(data.get("amount", 0))  # amount in ₹ from frontend
+    rupees = int(data.get("amount", 0))
     if rupees < 1:
         return jsonify({"error": "Amount must be at least ₹1"}), 400
 
@@ -644,11 +636,38 @@ def create_payment_order():
             "receipt": f"rcpt_{int(time.time())}",
             "payment_capture": 1
         })
+        rzp_order_id = order["id"]
+        print("DEBUG create_payment_order -> rzp_order_id:", rzp_order_id, "amount:", amount_paise)
+
+        # persist mapping (add columns once; ignored if exist)
+        with get_db() as conn:
+            c = conn.cursor()
+            try: c.execute("ALTER TABLE orders ADD COLUMN razorpay_order_id TEXT")
+            except sqlite3.OperationalError: pass
+            try: c.execute("ALTER TABLE orders ADD COLUMN paid INTEGER DEFAULT 0")
+            except sqlite3.OperationalError: pass
+
+            # create a lightweight order row if you want a record before shipping form is saved:
+            c.execute("""
+                INSERT INTO orders (email, name, address, phone, items_json, total, razorpay_order_id, paid)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 0)
+            """, (
+                session.get("email"),
+                (session.get("shipping") or {}).get("name"),
+                (session.get("shipping") or {}).get("address"),
+                (session.get("shipping") or {}).get("phone"),
+                json.dumps(session.get("cart", []), ensure_ascii=False),
+                rupees,
+                rzp_order_id
+            ))
+            conn.commit()
+            print("DEBUG internal order row inserted for rzp_order_id:", rzp_order_id)
+
         return jsonify({
             "ok": True,
-            "order": order,                  # has id/amount/currency
-            "key_id": RAZORPAY_KEY_ID,      # expose public key to frontend
-            "local_order_id": order.get("id")
+            "order": order,
+            "key_id": RAZORPAY_KEY_ID,
+            "local_order_id": rzp_order_id  # send back for client-side reference
         })
     except Exception as e:
         print("ERROR creating Razorpay order:", e)
@@ -711,17 +730,209 @@ def payment_success():
         return jsonify({"ok": False, "error": "Payment keys not configured"}), 400
 
     payload = request.get_json(silent=True) or {}
-    params = {
-        "razorpay_order_id": payload.get("razorpay_order_id"),
-        "razorpay_payment_id": payload.get("razorpay_payment_id"),
-        "razorpay_signature": payload.get("razorpay_signature"),
-    }
+    rzp_order_id = payload.get("razorpay_order_id")
+    rzp_payment_id = payload.get("razorpay_payment_id")
+    rzp_signature = payload.get("razorpay_signature")
+
+    if not (rzp_order_id and rzp_payment_id and rzp_signature):
+        return jsonify({"ok": False, "error": "missing_parameters"}), 400
+
+    # Verify signature
     try:
-        rzp_client.utility.verify_payment_signature(params)
+        rzp_client.utility.verify_payment_signature({
+            "razorpay_order_id": rzp_order_id,
+            "razorpay_payment_id": rzp_payment_id,
+            "razorpay_signature": rzp_signature
+        })
+        print("DEBUG signature OK for", rzp_order_id)
+    except razorpay.errors.SignatureVerificationError as e:
+        print("Payment verification failed:", e)
+        return jsonify({"ok": False, "error": "verification_failed"}), 400
+
+    # Finalize: mark paid & decrement stock atomically
+    try:
+        with get_db() as conn:
+            c = conn.cursor()
+            c.execute("SELECT id, items_json, paid, status FROM orders WHERE rzp_order_id = ? ORDER BY id DESC LIMIT 1", (rzp_order_id,))
+            row = c.fetchone()
+            if not row:
+                return jsonify({"ok": False, "error": "order_not_found"}), 404
+
+            oid = row["id"] if isinstance(row, sqlite3.Row) else row[0]
+            items_json = row["items_json"] if isinstance(row, sqlite3.Row) else row[1]
+            already_paid = (row["paid"] if isinstance(row, sqlite3.Row) else row[2]) == 1
+            status = row["status"] if isinstance(row, sqlite3.Row) else row[3]
+
+            if already_paid or status == "paid":
+                # idempotent
+                session["cart"] = []
+                session.pop("shipping", None)
+                return jsonify({"ok": True})
+
+            # Parse items and re-check stock
+            items = []
+            try:
+                items = json.loads(items_json) if items_json else []
+            except Exception:
+                pass
+
+            counts = {}
+            for it in items:
+                pid = it.get("id")
+                if pid:
+                    counts[pid] = counts.get(pid, 0) + 1
+
+            for pid, qty in counts.items():
+                c.execute("SELECT stock FROM products WHERE id = ?", (pid,))
+                r = c.fetchone()
+                if not r:
+                    raise Exception(f"Product {pid} not found")
+                stock = r["stock"] if isinstance(r, sqlite3.Row) else r[0]
+                if stock < qty:
+                    raise Exception(f"Insufficient stock for product {pid} (have {stock}, need {qty})")
+
+            # Decrement stock
+            for pid, qty in counts.items():
+                c.execute("UPDATE products SET stock = stock - ? WHERE id = ?", (qty, pid))
+
+            # Mark paid
+            c.execute("""
+                UPDATE orders
+                SET rzp_payment_id = ?, status = 'paid', paid = 1
+                WHERE id = ?
+            """, (rzp_payment_id, oid))
+
+            conn.commit()
+
+        # Clear local cart after success
+        session["cart"] = []
+        session.pop("shipping", None)
+
         return jsonify({"ok": True})
     except Exception as e:
-        print("Payment verification error:", e)
-        return jsonify({"ok": False, "error": "Verification failed"}), 400
+        print("ERROR finalizing order after payment:", e)
+        traceback.print_exc()
+        return jsonify({"ok": False, "error": "finalization_failed"}), 500
+    
+# --- Razorpay redirect callback (from Checkout with redirect:true) ---
+@app.route("/razorpay_callback", methods=["POST"])
+@login_required
+def razorpay_callback():
+    if not _has_payment_keys() or rzp_client is None:
+        return "Payment keys not configured", 400
+
+    # Razorpay posts form-encoded fields on redirect
+    rzp_order_id   = request.form.get("razorpay_order_id")
+    rzp_payment_id = request.form.get("razorpay_payment_id")
+    rzp_signature  = request.form.get("razorpay_signature")
+
+    if not (rzp_order_id and rzp_payment_id and rzp_signature):
+        return "Missing parameters", 400
+
+    # Verify signature
+    try:
+        rzp_client.utility.verify_payment_signature({
+            "razorpay_order_id": rzp_order_id,
+            "razorpay_payment_id": rzp_payment_id,
+            "razorpay_signature": rzp_signature
+        })
+    except Exception as e:
+        print("Callback signature verification failed:", e)
+        # Optional: show a failure page instead
+        return redirect(url_for("cart"))
+
+    # Mark order paid in your DB
+    with get_db() as conn:
+        c = conn.cursor()
+        # ensure columns (no-op if already exist)
+        try: c.execute("ALTER TABLE orders ADD COLUMN razorpay_order_id TEXT")
+        except sqlite3.OperationalError: pass
+        try: c.execute("ALTER TABLE orders ADD COLUMN razorpay_payment_id TEXT")
+        except sqlite3.OperationalError: pass
+        try: c.execute("ALTER TABLE orders ADD COLUMN paid INTEGER DEFAULT 0")
+        except sqlite3.OperationalError: pass
+
+        c.execute("""
+            UPDATE orders
+               SET razorpay_order_id = COALESCE(razorpay_order_id, ?),
+                   razorpay_payment_id = ?,
+                   paid = 1
+             WHERE razorpay_order_id = ?
+                OR id = (SELECT id FROM orders WHERE razorpay_order_id IS NULL ORDER BY id DESC LIMIT 1)
+        """, (rzp_order_id, rzp_payment_id, rzp_order_id))
+        conn.commit()
+
+    # Show your success page
+    return redirect(url_for("checkout"))
+
+@app.route("/razorpay_webhook", methods=["POST"])
+def razorpay_webhook():
+    # Raw body & signature header
+    body = request.get_data()
+    signature = request.headers.get("X-Razorpay-Signature")
+
+    if not signature:
+        return "Missing signature", 400
+
+    # Verify webhook signature
+    try:
+        razorpay.Utility.verify_webhook_signature(
+            body, signature, RAZORPAY_WEBHOOK_SECRET
+        )
+    except Exception as e:
+        print("Webhook signature verification failed:", e)
+        return "Bad signature", 400
+
+    payload = request.get_json(silent=True) or {}
+    event = payload.get("event")
+    entity = payload.get("payload", {})
+    print("Webhook event:", event)
+
+    # Try to read IDs from common events
+    rzp_order_id   = None
+    rzp_payment_id = None
+
+    # payment.* events
+    if "payment" in entity and entity["payment"].get("entity"):
+        pe = entity["payment"]["entity"]
+        rzp_payment_id = pe.get("id")
+        rzp_order_id   = pe.get("order_id")
+
+    # order.paid event
+    if not rzp_order_id and "order" in entity and entity["order"].get("entity"):
+        oe = entity["order"]["entity"]
+        rzp_order_id = oe.get("id")
+
+    # Update DB if we can map the order/payment
+    if rzp_order_id or rzp_payment_id:
+        with get_db() as conn:
+            c = conn.cursor()
+            try: c.execute("ALTER TABLE orders ADD COLUMN razorpay_order_id TEXT")
+            except sqlite3.OperationalError: pass
+            try: c.execute("ALTER TABLE orders ADD COLUMN razorpay_payment_id TEXT")
+            except sqlite3.OperationalError: pass
+            try: c.execute("ALTER TABLE orders ADD COLUMN paid INTEGER DEFAULT 0")
+            except sqlite3.OperationalError: pass
+
+            if rzp_order_id:
+                c.execute("""
+                    UPDATE orders
+                       SET razorpay_order_id = COALESCE(razorpay_order_id, ?),
+                           razorpay_payment_id = COALESCE(razorpay_payment_id, ?),
+                           paid = CASE WHEN ? IN ('payment.captured','order.paid') THEN 1 ELSE paid END
+                     WHERE razorpay_order_id = ?
+                        OR id = (SELECT id FROM orders WHERE razorpay_order_id IS NULL ORDER BY id DESC LIMIT 1)
+                """, (rzp_order_id, rzp_payment_id, event, rzp_order_id))
+            elif rzp_payment_id:
+                c.execute("""
+                    UPDATE orders
+                       SET razorpay_payment_id = ?
+                     WHERE razorpay_payment_id IS NULL
+                     ORDER BY id DESC LIMIT 1
+                """, (rzp_payment_id,))
+            conn.commit()
+
+    return "", 200
 
 @app.get("/_pay_diag")
 @admin_required
@@ -742,52 +953,9 @@ def cart():
 @login_required
 def checkout():
     cart = session.get("cart", [])
-    shipping = session.get("shipping", {})
-    total = sum(item.get("price", 0) for item in cart)
+    total = sum(int(item.get("price", 0)) for item in cart)
 
-    # Save order if we have shipping info
-    if cart and shipping:
-        with get_db() as conn:
-            c = conn.cursor()
-
-            # Count quantities per product id
-            counts = {}
-            for it in cart:
-                counts[it["id"]] = counts.get(it["id"], 0) + 1
-
-            # ensure stock is sufficient for all items (re-check)
-            for pid, qty in counts.items():
-                c.execute("SELECT stock FROM products WHERE id = ?", (pid,))
-                row = c.fetchone()
-                if not row:
-                    raise Exception(f"Product {pid} not found during checkout")
-                stock = row["stock"] if isinstance(row, sqlite3.Row) else row[0]
-                if stock < qty:
-                    raise Exception(f"Not enough stock for product id {pid} (have {stock}, need {qty})")
-
-            # decrement stock now (atomic-ish inside this connection)
-            for pid, qty in counts.items():
-                c.execute("UPDATE products SET stock = stock - ? WHERE id = ?", (qty, pid))
-
-            # insert order record
-            c.execute("""
-                INSERT INTO orders (email, name, address, phone, items_json, total)
-                VALUES (?, ?, ?, ?, ?, ?)
-            """, (
-                session.get("email"),
-                shipping.get("name"),
-                shipping.get("address"),
-                shipping.get("phone"),
-                json.dumps(cart, ensure_ascii=False),
-                total
-            ))
-
-            conn.commit()   # ✅ must be indented inside the "with" block
-
-    # Clear cart & shipping after checkout
-    session["cart"] = []
-    session.pop("shipping", None)
-
+    # Just render the page; do not clear cart / write orders / decrement stock here
     return render_template("checkout.html", total=total)
 
 @app.route("/submissions")

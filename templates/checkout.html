@@ -92,8 +92,12 @@
         description: "Purchase from Your PC Store",
         order_id: orderId,
 
+        /* 🔽 Added per your request */
+        redirect: true,
+        callback_url: "{{ url_for('razorpay_callback', _external=True) }}",
+
         handler: async function (response) {
-          // 3) Verify payment on your server
+          // 3) Verify payment on your server (used for instant-success flows)
           try {
             const verifyResp = await fetch("{{ url_for('payment_success') }}", {
               method: "POST",
