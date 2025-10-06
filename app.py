@@ -13,6 +13,8 @@ from decimal import Decimal, ROUND_HALF_UP
 import socket, ssl, requests
 from requests.exceptions import ConnectionError as ReqConnError, ReadTimeout
 import time, traceback
+import smtplib
+from email.message import EmailMessage
 
 app = Flask(__name__)
 app.secret_key = "mysecretkey"  # Needed for sessions
@@ -257,6 +259,35 @@ def save_build_to_db(build, email):
     except Exception as e:
         print("ERROR saving build:", e)
         traceback.print_exc()
+
+def send_order_email(to_email: str, subject: str, body: str) -> bool:
+    """
+    Send a simple text email using SMTP. Returns True on success, False on failure.
+    Uses env vars EMAIL_USER and EMAIL_PASS.
+    """
+    EMAIL_USER = os.getenv("EMAIL_USER")
+    EMAIL_PASS = os.getenv("EMAIL_PASS")
+
+    if not EMAIL_USER or not EMAIL_PASS:
+        print("WARN: EMAIL_USER or EMAIL_PASS not configured; skipping send_order_email")
+        return False
+
+    try:
+        msg = EmailMessage()
+        msg["From"] = EMAIL_USER
+        msg["To"] = to_email
+        msg["Subject"] = subject
+        msg.set_content(body)
+
+        # Gmail SMTP over SSL
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp:
+            smtp.login(EMAIL_USER, EMAIL_PASS)
+            smtp.send_message(msg)
+        print("INFO: Sent order email to", to_email)
+        return True
+    except Exception as e:
+        print("ERROR sending email:", e)
+        return False
 
 # ---------- Auth guards ----------
 def login_required(view_func):
@@ -601,10 +632,13 @@ def api_remove_one_from_cart(pc_id):
 @app.route("/shipping", methods=["GET", "POST"])
 @login_required
 def shipping():
+    # If cart empty, send user to store
     if not session.get("cart"):
         return redirect(url_for("store"))
 
     error = None
+
+    # Handle form POST (existing behaviour)
     if request.method == "POST":
         name = request.form.get("name", "").strip()
         address = request.form.get("address", "").strip()
@@ -612,13 +646,74 @@ def shipping():
 
         if not name or not address or not phone:
             error = "Please fill out all fields."
-            return render_template("shipping.html", error=error)
+            return render_template("shipping.html", error=error, success_msg=None)
 
-        # Save into session only; no DB writes here
+        # Save into session then proceed to checkout
         session["shipping"] = {"name": name, "address": address, "phone": phone}
+
+        # ---- existing DB insert block (unchanged) ----
+        print(f"DEBUG: checkout called at {time.strftime('%Y-%m-%d %H:%M:%S')}")
+        print("DEBUG: session email:", session.get("email"))
+        print("DEBUG: cart:", session.get("cart"))
+        print("DEBUG: shipping:", session.get("shipping"))
+
+        try:
+            cart = session.get("cart", [])
+            shipping_info = session.get("shipping", {})
+            total = sum(item.get("price", 0) for item in cart)
+
+            if cart and shipping_info:
+                with get_db() as conn:
+                    c = conn.cursor()
+                    c.execute("""
+                        CREATE TABLE IF NOT EXISTS orders (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            email TEXT,
+                            name TEXT,
+                            address TEXT,
+                            phone TEXT,
+                            items_json TEXT,
+                            total INTEGER
+                        )
+                    """)
+                    c.execute("""
+                        INSERT INTO orders (email, name, address, phone, items_json, total)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                    """, (
+                        session.get("email"),
+                        shipping_info.get("name"),
+                        shipping_info.get("address"),
+                        shipping_info.get("phone"),
+                        json.dumps(cart),
+                        total
+                    ))
+                    conn.commit()
+                    print("DEBUG: order inserted, lastrowid:", c.lastrowid)
+            else:
+                print("DEBUG: no cart or no shipping - skipping DB insert")
+        except Exception as e:
+            print("ERROR saving order:", e)
+            traceback.print_exc()
+        # ---- end DB insert ----
+
+        # after saving, clear or redirect to checkout
         return redirect(url_for("checkout"))
 
-    return render_template("shipping.html", error=error)
+    # ---- GET branch: check for payment success flag and render ----
+    # This will be True if the server set session["payment_success"] after verifying Razorpay
+    # or if the client passed ?paid=1 in the URL after redirect.
+    paid_flag = (request.args.get("paid") == "1") or session.pop("payment_success", False)
+
+    if paid_flag:
+        success_msg = (
+            "Your payment was successful — thank you! "
+            "We will dispatch your prebuilt PC in 10-15 working days. "
+            "For queries contact: yourpc2928@gmail.com"
+        )
+    else:
+        success_msg = None
+
+    return render_template("shipping.html", error=error, success_msg=success_msg)
 
 @app.post("/create_payment_order")
 @login_required
@@ -741,89 +836,74 @@ def payment_success():
         return jsonify({"ok": False, "error": "Payment keys not configured"}), 400
 
     payload = request.get_json(silent=True) or {}
-    rzp_order_id = payload.get("razorpay_order_id")
-    rzp_payment_id = payload.get("razorpay_payment_id")
-    rzp_signature = payload.get("razorpay_signature")
-
-    if not (rzp_order_id and rzp_payment_id and rzp_signature):
+    params = {
+        "razorpay_order_id": payload.get("razorpay_order_id"),
+        "razorpay_payment_id": payload.get("razorpay_payment_id"),
+        "razorpay_signature": payload.get("razorpay_signature"),
+    }
+    if not all(params.values()):
         return jsonify({"ok": False, "error": "missing_parameters"}), 400
 
-    # Verify signature
     try:
-        rzp_client.utility.verify_payment_signature({
-            "razorpay_order_id": rzp_order_id,
-            "razorpay_payment_id": rzp_payment_id,
-            "razorpay_signature": rzp_signature
-        })
-        print("DEBUG signature OK for", rzp_order_id)
-    except razorpay.errors.SignatureVerificationError as e:
-        print("Payment verification failed:", e)
-        return jsonify({"ok": False, "error": "verification_failed"}), 400
+        # verify signature using razorpay util
+        rzp_client.utility.verify_payment_signature(params)
+    except Exception as e:
+        print("Payment verification error:", e)
+        return jsonify({"ok": False, "error": "signature_verification_failed"}), 400
 
-    # Finalize: mark paid & decrement stock atomically
+    # Verified: mark order paid in DB and send confirmation email
     try:
         with get_db() as conn:
             c = conn.cursor()
-            c.execute("SELECT id, items_json, paid, status FROM orders WHERE rzp_order_id = ? ORDER BY id DESC LIMIT 1", (rzp_order_id,))
-            row = c.fetchone()
-            if not row:
-                return jsonify({"ok": False, "error": "order_not_found"}), 404
+            # ensure columns exist (safe to run repeatedly)
+            try: c.execute("ALTER TABLE orders ADD COLUMN razorpay_payment_id TEXT")
+            except sqlite3.OperationalError: pass
+            try: c.execute("ALTER TABLE orders ADD COLUMN razorpay_order_id TEXT")
+            except sqlite3.OperationalError: pass
+            try: c.execute("ALTER TABLE orders ADD COLUMN paid INTEGER DEFAULT 0")
+            except sqlite3.OperationalError: pass
 
-            oid = row["id"] if isinstance(row, sqlite3.Row) else row[0]
-            items_json = row["items_json"] if isinstance(row, sqlite3.Row) else row[1]
-            already_paid = (row["paid"] if isinstance(row, sqlite3.Row) else row[2]) == 1
-            status = row["status"] if isinstance(row, sqlite3.Row) else row[3]
+            # Update the order row: find by razorpay_order_id or local mapping
+            rzp_order_id = params["razorpay_order_id"]
+            rzp_payment_id = params["razorpay_payment_id"]
 
-            if already_paid or status == "paid":
-                # idempotent
-                session["cart"] = []
-                session.pop("shipping", None)
-                return jsonify({"ok": True})
-
-            # Parse items and re-check stock
-            items = []
-            try:
-                items = json.loads(items_json) if items_json else []
-            except Exception:
-                pass
-
-            counts = {}
-            for it in items:
-                pid = it.get("id")
-                if pid:
-                    counts[pid] = counts.get(pid, 0) + 1
-
-            for pid, qty in counts.items():
-                c.execute("SELECT stock FROM products WHERE id = ?", (pid,))
-                r = c.fetchone()
-                if not r:
-                    raise Exception(f"Product {pid} not found")
-                stock = r["stock"] if isinstance(r, sqlite3.Row) else r[0]
-                if stock < qty:
-                    raise Exception(f"Insufficient stock for product {pid} (have {stock}, need {qty})")
-
-            # Decrement stock
-            for pid, qty in counts.items():
-                c.execute("UPDATE products SET stock = stock - ? WHERE id = ?", (qty, pid))
-
-            # Mark paid
+            # Prefer updating the order that matches razorpay_order_id
             c.execute("""
                 UPDATE orders
-                SET rzp_payment_id = ?, status = 'paid', paid = 1
-                WHERE id = ?
-            """, (rzp_payment_id, oid))
-
+                SET razorpay_order_id = ?, razorpay_payment_id = ?, paid = 1
+                WHERE razorpay_order_id = ?
+            """, (rzp_order_id, rzp_payment_id, rzp_order_id))
+            if c.rowcount == 0:
+                # fallback: try to update most recent order for this user (if not mapped)
+                c.execute("""
+                    UPDATE orders
+                    SET razorpay_order_id = ?, razorpay_payment_id = ?, paid = 1
+                    WHERE email = ? AND (paid = 0 OR paid IS NULL)
+                    ORDER BY id DESC
+                    LIMIT 1
+                """, (rzp_order_id, rzp_payment_id, session.get("email")))
             conn.commit()
 
-        # Clear local cart after success
-        session["cart"] = []
-        session.pop("shipping", None)
+        # send confirmation email to the user (if we have their email)
+        user_email = session.get("email")
+        if user_email:
+            subj = "Thank you for your purchase — Your PC order received"
+            body = (
+                "Thank you for the purchase — your prebuilt PC will be sent to you in 10-15 working days.\n\n"
+                "If you have any queries please contact us at yourpc2928@gmail.com\n\n"
+                "Order reference (Razorpay): " + (params["razorpay_order_id"] or "")
+            )
+            send_order_email(user_email, subj, body)
 
-        return jsonify({"ok": True})
+        # optionally set session flag so shipping page can show success
+        session["payment_success"] = True
+
+        return jsonify({"ok": True}), 200
+
     except Exception as e:
-        print("ERROR finalizing order after payment:", e)
+        print("ERROR marking order paid:", e)
         traceback.print_exc()
-        return jsonify({"ok": False, "error": "finalization_failed"}), 500
+        return jsonify({"ok": False, "error": "db_update_failed"}), 500
     
 # --- Razorpay redirect callback (from Checkout with redirect:true) ---
 @app.route("/razorpay/callback", methods=["GET", "POST"])

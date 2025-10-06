@@ -116,7 +116,7 @@
             if (verifyResp.ok && verifyJson && verifyJson.ok) {
               try { rzp.close(); } catch(e) {}
               // Redirect to your success/thank-you (here we reuse checkout page which shows success)
-              window.location.href = "{{ url_for('checkout') }}";
+              window.location.href = "{{ url_for('shipping') }}?paid=1";
             } else {
               errorDiv.textContent = (verifyJson && verifyJson.error) ? verifyJson.error : "Payment verification failed.";
               try { rzp.close(); } catch(e) {}
@@ -132,6 +132,7 @@
 
         prefill: {
           email: "{{ session.get('email') or '' }}",
+
         },
 
         theme: { color: "#2E86AB" }
