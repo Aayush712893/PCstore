@@ -7,32 +7,32 @@
 
 {% if success_msg %}
   <div class="alert success" role="status"
-       style="background:#e6ffed; border:1px solid #bdeccb; padding:12px; margin:15px auto; max-width:500px;
-              text-align:center; font-family:'Segoe UI', sans-serif; border-radius:6px;">
+       style="background:#e6ffed;border:1px solid #bdeccb;padding:12px;margin:15px auto;
+              max-width:500px;text-align:center;border-radius:6px;">
     {{ success_msg }}
   </div>
 {% endif %}
 
 {% if error %}
-  <p style="color:red; text-align:center; font-family:'Segoe UI', sans-serif;">{{ error }}</p>
+  <p style="color:red; text-align:center;">{{ error }}</p>
 {% endif %}
 
 <form method="POST" action="{{ url_for('shipping') }}" style="max-width: 500px; margin:auto;">
-  <label for="name" style="font-weight:bold;">Full Name</label><br>
+  <label for="name">Full Name</label><br>
   <input type="text" id="name" name="name" required
-         style="width:100%; padding:10px; margin-bottom:12px; border-radius:5px; border:1px solid #ccc;"><br>
+         style="width:100%; padding:10px; margin-bottom:12px;"><br>
 
-  <label for="address" style="font-weight:bold;">Address</label><br>
+  <label for="address">Address</label><br>
   <textarea id="address" name="address" rows="4" required
-            style="width:100%; padding:10px; margin-bottom:12px; border-radius:5px; border:1px solid #ccc;"></textarea><br>
+            style="width:100%; padding:10px; margin-bottom:12px;"></textarea><br>
 
-  <label for="phone" style="font-weight:bold;">Contact Number</label><br>
+  <label for="phone">Contact Number</label><br>
   <input type="tel" id="phone" name="phone" required
-         style="width:100%; padding:10px; margin-bottom:16px; border-radius:5px; border:1px solid #ccc;"><br>
+         style="width:100%; padding:10px; margin-bottom:16px;"><br>
 
   <button type="submit"
           style="width:100%; padding:12px; background:#007bff; color:white;
-                 border:none; border-radius:6px; font-weight:bold; cursor:pointer;">
+                 border:none; border-radius:6px;">
     Continue to Checkout
   </button>
 </form>
