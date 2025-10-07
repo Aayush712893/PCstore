@@ -712,8 +712,10 @@ def shipping():
         )
     else:
         success_msg = None
+        if session.pop("payment_success", False):
+            success_msg = "Your payment was successful — thank you! We will dispatch your prebuilt PC in 10-15 working days."
 
-    return render_template("shipping.html", error=error, success_msg=success_msg)
+        return render_template("shipping.html", error=error, success_msg=success_msg)
 
 @app.post("/create_payment_order")
 @login_required
@@ -829,81 +831,161 @@ def verify_payment():
 
     return jsonify({"ok": True}), 200
 
+# Payment verification endpoint (client calls after Razorpay checkout)
 @app.post("/payment_success")
 @login_required
 def payment_success():
+    """
+    Expects JSON:
+    { "razorpay_order_id": "...", "razorpay_payment_id": "...", "razorpay_signature": "...", "local_order_id": "..." }
+    This verifies the signature, marks DB order as paid and sends a confirmation email.
+    """
     if not _has_payment_keys() or rzp_client is None:
         return jsonify({"ok": False, "error": "Payment keys not configured"}), 400
 
     payload = request.get_json(silent=True) or {}
-    params = {
-        "razorpay_order_id": payload.get("razorpay_order_id"),
-        "razorpay_payment_id": payload.get("razorpay_payment_id"),
-        "razorpay_signature": payload.get("razorpay_signature"),
-    }
-    if not all(params.values()):
+    razorpay_order_id = payload.get("razorpay_order_id")
+    razorpay_payment_id = payload.get("razorpay_payment_id")
+    razorpay_signature = payload.get("razorpay_signature")
+    local_order_id = payload.get("local_order_id")  # this is the Razorpay order id or the local internal id you returned earlier
+
+    if not (razorpay_order_id and razorpay_payment_id and razorpay_signature):
         return jsonify({"ok": False, "error": "missing_parameters"}), 400
 
+    # 1) Verify signature with Razorpay utility
     try:
-        # verify signature using razorpay util
-        rzp_client.utility.verify_payment_signature(params)
+        rzp_client.utility.verify_payment_signature({
+            "razorpay_order_id": razorpay_order_id,
+            "razorpay_payment_id": razorpay_payment_id,
+            "razorpay_signature": razorpay_signature
+        })
     except Exception as e:
         print("Payment verification error:", e)
         return jsonify({"ok": False, "error": "signature_verification_failed"}), 400
 
-    # Verified: mark order paid in DB and send confirmation email
+    # 2) Mark the order paid in DB and store razorpay_payment_id
+    buyer_email = session.get("email")  # fallback
     try:
         with get_db() as conn:
             c = conn.cursor()
-            # ensure columns exist (safe to run repeatedly)
-            try: c.execute("ALTER TABLE orders ADD COLUMN razorpay_payment_id TEXT")
-            except sqlite3.OperationalError: pass
-            try: c.execute("ALTER TABLE orders ADD COLUMN razorpay_order_id TEXT")
-            except sqlite3.OperationalError: pass
-            try: c.execute("ALTER TABLE orders ADD COLUMN paid INTEGER DEFAULT 0")
-            except sqlite3.OperationalError: pass
+            # Ensure columns exist
+            try:
+                c.execute("ALTER TABLE orders ADD COLUMN razorpay_order_id TEXT")
+            except sqlite3.OperationalError:
+                pass
+            try:
+                c.execute("ALTER TABLE orders ADD COLUMN razorpay_payment_id TEXT")
+            except sqlite3.OperationalError:
+                pass
+            try:
+                c.execute("ALTER TABLE orders ADD COLUMN paid INTEGER DEFAULT 0")
+            except sqlite3.OperationalError:
+                pass
 
-            # Update the order row: find by razorpay_order_id or local mapping
-            rzp_order_id = params["razorpay_order_id"]
-            rzp_payment_id = params["razorpay_payment_id"]
-
-            # Prefer updating the order that matches razorpay_order_id
-            c.execute("""
-                UPDATE orders
-                SET razorpay_order_id = ?, razorpay_payment_id = ?, paid = 1
-                WHERE razorpay_order_id = ?
-            """, (rzp_order_id, rzp_payment_id, rzp_order_id))
-            if c.rowcount == 0:
-                # fallback: try to update most recent order for this user (if not mapped)
+            # Prefer matching by razorpay_order_id if present, otherwise use local_order_id logic
+            updated = 0
+            if razorpay_order_id:
                 c.execute("""
                     UPDATE orders
-                    SET razorpay_order_id = ?, razorpay_payment_id = ?, paid = 1
-                    WHERE email = ? AND (paid = 0 OR paid IS NULL)
+                    SET razorpay_payment_id = ?, razorpay_order_id = ?, paid = 1
+                    WHERE razorpay_order_id = ?
+                """, (razorpay_payment_id, razorpay_order_id, razorpay_order_id))
+                updated = c.rowcount
+
+            if updated == 0 and local_order_id:
+                # in some flows you stored the local DB id in local_order_id
+                try:
+                    local_id = int(local_order_id)
+                    c.execute("""
+                        UPDATE orders
+                        SET razorpay_payment_id = ?, razorpay_order_id = ?, paid = 1
+                        WHERE id = ?
+                    """, (razorpay_payment_id, razorpay_order_id, local_id))
+                    updated = c.rowcount
+                except Exception:
+                    pass
+
+            # If still nothing updated, try to update latest unpaid order for this user (best-effort)
+            if updated == 0 and buyer_email:
+                c.execute("""
+                    UPDATE orders
+                    SET razorpay_payment_id = ?, razorpay_order_id = ?, paid = 1
+                    WHERE email = ? AND (paid IS NULL OR paid = 0)
                     ORDER BY id DESC
                     LIMIT 1
-                """, (rzp_order_id, rzp_payment_id, session.get("email")))
+                """, (razorpay_payment_id, razorpay_order_id, buyer_email))
+                updated = c.rowcount
+
+            # Retrieve order info for sending email (fetch the row that was updated)
+            order_row = None
+            if updated:
+                # fetch the order we just marked paid
+                if razorpay_order_id:
+                    c.execute("SELECT id, email, items_json, total FROM orders WHERE razorpay_order_id = ? ORDER BY id DESC LIMIT 1", (razorpay_order_id,))
+                elif local_order_id:
+                    try:
+                        c.execute("SELECT id, email, items_json, total FROM orders WHERE id = ? LIMIT 1", (int(local_order_id),))
+                    except Exception:
+                        c.execute("SELECT id, email, items_json, total FROM orders WHERE email = ? ORDER BY id DESC LIMIT 1", (buyer_email,))
+                else:
+                    c.execute("SELECT id, email, items_json, total FROM orders WHERE email = ? ORDER BY id DESC LIMIT 1", (buyer_email,))
+                order_row = c.fetchone()
             conn.commit()
-
-        # send confirmation email to the user (if we have their email)
-        user_email = session.get("email")
-        if user_email:
-            subj = "Thank you for your purchase — Your PC order received"
-            body = (
-                "Thank you for the purchase — your prebuilt PC will be sent to you in 10-15 working days.\n\n"
-                "If you have any queries please contact us at yourpc2928@gmail.com\n\n"
-                "Order reference (Razorpay): " + (params["razorpay_order_id"] or "")
-            )
-            send_order_email(user_email, subj, body)
-
-        # optionally set session flag so shipping page can show success
-        session["payment_success"] = True
-
-        return jsonify({"ok": True}), 200
-
     except Exception as e:
-        print("ERROR marking order paid:", e)
+        print("DB update error in payment_success:", e)
         traceback.print_exc()
+        # still attempt to return ok to the client? better to return error
         return jsonify({"ok": False, "error": "db_update_failed"}), 500
+
+    # 3) set session flag so shipping page can show success message
+    session['payment_success'] = True
+
+    # 4) send confirmation email to the buyer (best-effort). Use env vars for SMTP creds.
+    try:
+        if order_row:
+            order_email = order_row["email"] if isinstance(order_row, sqlite3.Row) else order_row[1]
+        else:
+            order_email = session.get("email")
+
+        # only send if we have an email
+        if order_email:
+            # Email config from environment
+            SMTP_USER = os.getenv("SMTP_USER")      # yourpc2928@gmail.com
+            SMTP_PASS = os.getenv("SMTP_PASS")      # app password or SMTP password
+            SMTP_HOST = os.getenv("SMTP_HOST", "smtp.gmail.com")
+            SMTP_PORT = int(os.getenv("SMTP_PORT", 587))
+
+            if SMTP_USER and SMTP_PASS:
+                try:
+                    from email.message import EmailMessage
+                    import smtplib
+
+                    msg = EmailMessage()
+                    msg["From"] = SMTP_USER
+                    msg["To"] = order_email
+                    msg["Subject"] = "Thank you for your purchase — Your PC Store"
+                    msg.set_content(
+                        "Thank you for the purchase — your prebuild PC will be sent to you in 10-15 working days.\n\n"
+                        "For any queries contact us at yourpc2928@gmail.com\n\n"
+                        "— Your PC Store"
+                    )
+
+                    # send (TLS)
+                    smtp = smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=15)
+                    smtp.ehlo()
+                    smtp.starttls()
+                    smtp.login(SMTP_USER, SMTP_PASS)
+                    smtp.send_message(msg)
+                    smtp.quit()
+                    print("INFO: confirmation email sent to", order_email)
+                except Exception as mail_e:
+                    print("WARN: could not send confirmation email:", mail_e)
+            else:
+                print("WARN: SMTP_USER or SMTP_PASS not set — skipping email send.")
+    except Exception as e:
+        print("WARN: email sending step failed:", e)
+
+    return jsonify({"ok": True})
     
 # --- Razorpay redirect callback (from Checkout with redirect:true) ---
 @app.route("/razorpay/callback", methods=["GET", "POST"])
