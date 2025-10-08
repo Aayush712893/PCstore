@@ -328,6 +328,11 @@ def inject_cart_info():
         "cart_items": cart
     }
 
+@app.context_processor
+def inject_current_year():
+    from datetime import datetime
+    return {"current_year": datetime.utcnow().year}
+
 # ---------- Product seeding ----------
 # Your prebuilt product definitions (used to seed DB on first run)
 prebuilds = [
