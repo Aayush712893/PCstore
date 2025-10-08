@@ -395,14 +395,6 @@ prebuilds = [
             "GPU - NVIDIA RTX 4070 Super"
         ]
     },
-    {
-        "id": 999,
-        "name": "Razorpay Test Product (₹2)",
-        "price": 2,
-        "image": "test.png",
-        "specs": ["Test purchase - ₹2"],
-        "stock": 99
-    }
 ]
 
 def create_products_table():
