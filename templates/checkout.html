@@ -1,277 +1,305 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Checkout — Your PC</title>
-
-  <!-- Minimal modern styles -->
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Checkout | Your PC Store</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
   <style>
-    :root{
-      --bg:#0f1724;
-      --card:#0b1220;
-      --muted:#94a3b8;
-      --accent:#2E86AB;
-      --accent-2:#1b6f9a;
-      --success:#2ecc71;
-      --danger:#e03e2d;
-      --glass: rgba(255,255,255,0.03);
-      --radius:12px;
-      font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial;
-      color: #e6eef6;
+    body {
+      background: #f6f8fa;
+      font-family: "Segoe UI", Roboto, Arial, sans-serif;
+      color: #2d3748;
+      margin: 0;
+      padding: 0;
     }
-    html,body{height:100%;margin:0;background:linear-gradient(180deg,#071025 0%, #081226 100%);font-family:inherit}
-    .container{max-width:980px;margin:28px auto;padding:20px}
-    .topbar{display:flex;justify-content:space-between;align-items:center;margin-bottom:18px}
-    .brand{font-weight:700;letter-spacing:0.2px}
-    nav a{color:var(--muted);text-decoration:none;margin-left:12px;font-size:14px}
-    .layout{display:grid;grid-template-columns:1fr 360px;gap:20px}
-    @media (max-width:880px){ .layout{grid-template-columns:1fr; } .right-col{order:2} }
-
-    .items{background:var(--card);border-radius:var(--radius);padding:18px;box-shadow:0 6px 18px rgba(3,6,12,0.6)}
-    .items h2{margin:0 0 12px 0;font-size:20px}
-    .item{display:flex;gap:12px;align-items:center;padding:12px;border-radius:8px;background:var(--glass);margin-bottom:12px}
-    .item img{width:84px;height:64px;object-fit:cover;border-radius:8px;flex-shrink:0}
-    .item .meta{flex:1}
-    .item .meta .name{font-weight:600}
-    .item .meta .specs{color:var(--muted);font-size:13px;margin-top:6px;line-height:1.2}
-    .item .price{font-weight:700;min-width:82px;text-align:right}
-
-    .summary{background:linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01)); padding:18px;border-radius:var(--radius);box-shadow:0 6px 18px rgba(3,6,12,0.6)}
-    .summary h3{margin:0 0 10px 0}
-    .muted{color:var(--muted);font-size:13px;margin-top:8px}
-    .btn{display:inline-flex;align-items:center;gap:10px;justify-content:center;background:linear-gradient(180deg,var(--accent),var(--accent-2));color:white;border:none;padding:12px 16px;border-radius:10px;font-weight:700;cursor:pointer}
-    .btn:disabled{opacity:.6;cursor:not-allowed}
-    .error{color:var(--danger);margin-top:8px}
-    .success{color:var(--success);margin-top:8px}
-    .spinner{width:18px;height:18px;border-radius:50%;border:2px solid rgba(255,255,255,0.12);border-top-color:#fff;animation:spin 0.9s linear infinite}
-    @keyframes spin{to{transform:rotate(360deg)}}
-    .note{font-size:13px;color:var(--muted);margin-top:12px}
-    footer{margin-top:24px;text-align:center;color:var(--muted);font-size:13px}
+    header {
+      background: #fff;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.05);
+      padding: 12px 0;
+    }
+    nav {
+      max-width: 1000px;
+      margin: 0 auto;
+      text-align: center;
+    }
+    nav a {
+      margin: 0 10px;
+      text-decoration: none;
+      color: #2E86AB;
+      font-weight: 600;
+    }
+    main.checkout-container {
+      max-width: 1000px;
+      margin: 32px auto;
+      display: grid;
+      grid-template-columns: 1fr 340px;
+      gap: 24px;
+      align-items: start;
+    }
+    @media(max-width: 768px) {
+      main.checkout-container { grid-template-columns: 1fr; }
+    }
+    .card {
+      background: #fff;
+      border-radius: 10px;
+      box-shadow: 0 4px 14px rgba(0,0,0,0.05);
+      padding: 20px 24px;
+    }
+    h1.checkout-title {
+      font-size: 1.8rem;
+      font-weight: 700;
+      margin-bottom: 12px;
+      color: #1a202c;
+    }
+    .product-row {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+      border-bottom: 1px solid #edf2f7;
+      padding: 10px 0;
+    }
+    .product-row img {
+      width: 70px;
+      height: 70px;
+      object-fit: cover;
+      border-radius: 8px;
+    }
+    .product-name {
+      font-weight: 600;
+      color: #2d3748;
+    }
+    .muted {
+      color: #718096;
+      font-size: 0.95rem;
+    }
+    .checkout-summary h3 {
+      margin-top: 24px;
+      font-size: 1.2rem;
+      font-weight: 700;
+      color: #1a202c;
+    }
+    .checkout-summary ul {
+      list-style: none;
+      padding: 0;
+      margin: 8px 0;
+    }
+    .checkout-summary li {
+      margin-bottom: 6px;
+      color: #2d3748;
+    }
+    .checkout-summary hr {
+      margin: 10px 0;
+      border: none;
+      border-top: 1px solid #e2e8f0;
+    }
+    .checkout-summary div {
+      font-size: 1rem;
+    }
+    #grand-total {
+      color: #1a202c;
+      font-weight: 700;
+      font-size: 1.1rem;
+    }
+    #error {
+      color: #e53e3e;
+      margin-top: 12px;
+      font-weight: 600;
+    }
+    aside.card {
+      position: sticky;
+      top: 20px;
+    }
+    .payment-title {
+      font-size: 1.4rem;
+      font-weight: 700;
+      margin-bottom: 8px;
+      color: #1a202c;
+    }
+    .pay-amount {
+      font-size: 2rem;
+      font-weight: 800;
+      margin: 10px 0 16px;
+      color: #2E86AB;
+    }
+    .btn {
+      background: linear-gradient(135deg, #007bff, #0056b3);
+      color: white;
+      border: none;
+      padding: 14px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-weight: 600;
+      width: 100%;
+      transition: all 0.3s ease;
+      font-size: 1rem;
+      box-shadow: 0 3px 8px rgba(0, 91, 187, 0.3);
+    }
+    .btn:hover {
+      background: linear-gradient(135deg, #006ae6, #004b99);
+      transform: translateY(-1px);
+    }
+    .btn:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+    footer.checkout-footer {
+      text-align: center;
+      color: #718096;
+      padding: 24px 0;
+      font-size: 0.9rem;
+    }
   </style>
 </head>
 <body>
-  <div class="container">
-    <div class="topbar">
-      <div class="brand">Your PC</div>
-      <nav>
-        <a href="{{ url_for('home') }}">Home</a>
-        <a href="{{ url_for('build') }}">Build</a>
-        <a href="{{ url_for('store') }}">Store</a>
-        <a href="{{ url_for('cart') }}">Cart</a>
-        {% if session.get('logged_in') %}
-          <a href="{{ url_for('logout') }}">Logout</a>
-        {% else %}
-          <a href="{{ url_for('login') }}">Login</a>
-        {% endif %}
-      </nav>
-    </div>
+  <header>
+    <nav>
+      <a href="{{ url_for('home') }}">Home</a> |
+      <a href="{{ url_for('build') }}">Build</a> |
+      <a href="{{ url_for('store') }}">Store</a> |
+      <a href="{{ url_for('cart') }}">Cart</a>
+    </nav>
+  </header>
 
-    <div class="layout">
-      <div class="items">
-        <h2>Order Summary</h2>
+  <main class="checkout-container">
+    <!-- Left: Order details -->
+    <section class="card">
+      <h1 class="checkout-title">Checkout</h1>
 
-        {% if cart_items and cart_items|length > 0 %}
-          {% set grouped = {} %}
-          {% for it in cart_items %}
-            {% set gid = it.id if it.id is defined else it['id'] %}
-            {% set _ = grouped.update({gid: (grouped.get(gid, {'item':it, 'qty':0}) )}) %}
-            {% set _ = grouped[gid].update({'qty': grouped[gid].qty + 1}) %}
-          {% endfor %}
-
-          {% for gid, info in grouped.items() %}
-            {% set item = info.item %}
-            {% set qty = info.qty %}
-            <div class="item" role="listitem">
-              <img src="{{ url_for('static', filename=(item.image if item.image is defined else item['image'])) }}" alt="{{ item.name if item.name is defined else item['name'] }}">
-              <div class="meta">
-                <div class="name">{{ item.name if item.name is defined else item['name'] }}</div>
-                <div class="specs">
-                  {% if item.specs %}
-                    {{ item.specs|join(' • ') }}
-                  {% endif %}
-                </div>
-              </div>
-              <div class="price">
-                ₹{{ (item.price if item.price is defined else item['price']) }} × {{ qty }}<br>
-                <small style="color:var(--muted);font-weight:600">
-                  = ₹{{ (item.price if item.price is defined else item['price']) * qty }}
-                </small>
-              </div>
+      {% if cart and cart|length > 0 %}
+        {% for item in cart %}
+          <div class="product-row">
+            {% if item.image %}
+              <img src="{{ url_for('static', filename=item.image) }}" alt="{{ item.name }}">
+            {% endif %}
+            <div>
+              <div class="product-name">{{ item.name }}</div>
+              <div class="muted">₹{{ item.price }}</div>
             </div>
+          </div>
+        {% endfor %}
+      {% else %}
+        <p class="muted">Your cart is empty.</p>
+      {% endif %}
+
+      <!-- Totals section -->
+      <div class="checkout-summary">
+        <h3>Order Summary</h3>
+        <ul>
+          {% for item in cart %}
+            <li><strong>{{ item.name }}</strong> — ₹{{ item.price }}</li>
           {% endfor %}
-        {% else %}
-          <p style="color:var(--muted);">Your cart is empty. <a href="{{ url_for('store') }}">Browse prebuilt PCs</a></p>
-        {% endif %}
+        </ul>
+
+        <div>Products: ₹<span id="product-total">{{ product_total }}</span></div>
+        <div>Shipping: ₹<span id="shipping-charge">{{ shipping_charge }}</span></div>
+        <hr>
+        <div>Total: ₹<span id="grand-total">{{ total }}</span></div>
       </div>
 
-      <aside class="summary right-col">
-        <h3>Payment</h3>
+      <div id="error" role="alert"></div>
+    </section>
 
-        <div style="display:flex;justify-content:space-between;align-items:center">
-          <div class="muted">Amount</div>
-          <div style="font-weight:800;font-size:20px">₹{{ total }}</div>
-        </div>
+    <!-- Right: Payment Section -->
+    <aside class="card">
+      <div class="payment-title">Payment</div>
+      <p class="muted">Amount to be charged:</p>
+      <div class="pay-amount">₹{{ total }}</div>
 
-        <div style="margin-top:12px;">
-          <button id="pay-btn" class="btn" {% if not cart_items or cart_items|length == 0 %}disabled{% endif %}>
-            <span id="btn-content">Pay with Razorpay</span>
-            <span id="spinner" style="display:none;margin-left:6px" class="spinner" aria-hidden="true"></span>
-          </button>
-        </div>
+      <button id="pay-btn" class="btn">Pay with Razorpay</button>
 
-        <div id="status" role="status" aria-live="polite"></div>
-        <div id="error" class="error" role="alert" style="display:none"></div>
-        <div id="success" class="success" role="status" style="display:none"></div>
+      <p class="muted" style="margin-top:12px;">Secure payments powered by Razorpay</p>
+    </aside>
+  </main>
 
-        <div style="margin-top:14px;">
-          <div class="muted">
-            You will be redirected to the payment provider. After successful payment, you'll be redirected to the home page.
-          </div>
-        </div>
-      </aside>
-    </div>
+  <footer class="checkout-footer">
+    &copy; {{ 2025 }} Your PC — secure payments powered by Razorpay
+  </footer>
 
-    <footer>
-      &copy; {{ current_year }} Your PC — secure payments powered by Razorpay
-    </footer>
-  </div>
-
-  <!-- Razorpay checkout script -->
+  <!-- Razorpay JS -->
   <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
 
   <script>
-    (function(){
-      const payBtn = document.getElementById('pay-btn');
-      const btnContent = document.getElementById('btn-content');
-      const spinner = document.getElementById('spinner');
-      const errEl = document.getElementById('error');
-      const successEl = document.getElementById('success');
-      const statusEl = document.getElementById('status');
-      const rupeeTotal = {{ (total or 0)|int }};
+    const payBtn = document.getElementById('pay-btn');
+    const errorDiv = document.getElementById('error');
+    const rupeeTotal = {{ (total or 0)|int }};
 
-      function setLoading(loading){
-        payBtn.disabled = loading;
-        spinner.style.display = loading ? 'inline-block' : 'none';
-        btnContent.style.opacity = loading ? 0.6 : 1;
-      }
+    payBtn.addEventListener('click', async () => {
+      payBtn.disabled = true;
+      errorDiv.textContent = "";
 
-      async function createOrderOnServer(amountRupees){
-        const resp = await fetch("{{ url_for('create_payment_order') }}", {
+      let resp, data;
+      try {
+        resp = await fetch("{{ url_for('create_payment_order') }}", {
           method: "POST",
           credentials: "same-origin",
           headers: { "Content-Type": "application/json", "Accept": "application/json" },
-          body: JSON.stringify({ amount: amountRupees })
+          body: JSON.stringify({ amount: rupeeTotal })
         });
-        const data = await resp.json().catch(()=>null);
-        return { ok: resp.ok, status: resp.status, json: data };
+        data = await resp.json().catch(() => null);
+      } catch (e) {
+        payBtn.disabled = false;
+        errorDiv.textContent = "Network error while creating payment order.";
+        return;
       }
 
-      async function verifyPaymentOnServer(payload){
-        const resp = await fetch("{{ url_for('payment_success') }}", {
-          method: "POST",
-          credentials: "same-origin",
-          headers: { "Content-Type": "application/json", "Accept": "application/json" },
-          body: JSON.stringify(payload)
-        });
-        const data = await resp.json().catch(()=>null);
-        return { ok: resp.ok, status: resp.status, json: data };
+      if (!resp.ok || !data || !data.order) {
+        payBtn.disabled = false;
+        errorDiv.textContent = (data && data.error) ? data.error : "Could not create payment order.";
+        return;
       }
 
-      payBtn.addEventListener('click', async function(){
-        errEl.style.display = 'none';
-        successEl.style.display = 'none';
-        statusEl.textContent = '';
+      const order = data.order || {};
+      const key = data.key_id || data.key;
+      const amountPaise = order.amount;
+      const currency = order.currency || "INR";
+      const orderId = order.id;
+      const localOrderId = data.local_order_id || null;
 
-        if (!rupeeTotal || rupeeTotal <= 0){
-          errEl.style.display = '';
-          errEl.textContent = "Invalid amount.";
-          return;
-        }
-
-        setLoading(true);
-
-        let result;
-        try {
-          result = await createOrderOnServer(rupeeTotal);
-        } catch (e) {
-          setLoading(false);
-          errEl.style.display = '';
-          errEl.textContent = "Network error creating payment order.";
-          return;
-        }
-
-        if (!result.ok || !result.json){
-          setLoading(false);
-          errEl.style.display = '';
-          errEl.textContent = (result.json && result.json.error) ? result.json.error : "Could not create payment order.";
-          return;
-        }
-
-        const data = result.json;
-        const order = data.order || {};
-        const key = data.key_id || data.key;
-        const amountPaise = (order.amount != null) ? order.amount : data.amount;
-        const currency = order.currency || data.currency || "INR";
-        const orderId = order.id || data.order_id;
-        const localOrderId = data.local_order_id || (order.id || null);
-
-        if (!key || !amountPaise || !orderId){
-          setLoading(false);
-          errEl.style.display = '';
-          errEl.textContent = "Payment order is invalid. Please try again.";
-          return;
-        }
-
-        const options = {
-          key: String(key),
-          amount: amountPaise,
-          currency: String(currency),
-          name: "Your PC Store",
-          description: "Order from Your PC",
-          order_id: String(orderId),
-          prefill: { email: "{{ session.get('email') or '' }}" },
-          theme: { color: "#2E86AB" },
-          handler: async function(response){
-            statusEl.textContent = "Verifying payment...";
-            try {
-              const verify = await verifyPaymentOnServer({
+      const options = {
+        key: key,
+        amount: amountPaise,
+        currency: currency,
+        name: "Your PC Store",
+        description: "Purchase from Your PC Store",
+        order_id: orderId,
+        handler: async function (response) {
+          try {
+            const verifyResp = await fetch("{{ url_for('payment_success') }}", {
+              method: "POST",
+              credentials: "same-origin",
+              headers: { "Content-Type": "application/json", "Accept": "application/json" },
+              body: JSON.stringify({
                 razorpay_payment_id: response.razorpay_payment_id,
                 razorpay_order_id: response.razorpay_order_id,
                 razorpay_signature: response.razorpay_signature,
                 local_order_id: localOrderId
-              });
-              if (verify.ok && verify.json && verify.json.ok){
-                successEl.style.display = '';
-                successEl.textContent = "Payment confirmed. Redirecting...";
-                setTimeout(()=>{ window.location.href = "{{ url_for('home') }}"; }, 900);
-              } else {
-                errEl.style.display = '';
-                errEl.textContent = (verify.json && verify.json.error) ? verify.json.error : "Payment verification failed.";
-                setLoading(false);
-              }
-            } catch (err){
-              errEl.style.display = '';
-              errEl.textContent = "Payment verification error.";
-              setLoading(false);
+              })
+            });
+            const verifyJson = await verifyResp.json().catch(()=>null);
+            if (verifyResp.ok && verifyJson && verifyJson.ok) {
+              window.location.href = "{{ url_for('home') }}";
+            } else {
+              errorDiv.textContent = "Payment verification failed.";
+              payBtn.disabled = false;
             }
+          } catch (err) {
+            errorDiv.textContent = "Payment verification error.";
+            payBtn.disabled = false;
           }
-        };
+        },
+        prefill: { email: "{{ session.get('email') or '' }}" },
+        theme: { color: "#007bff" }
+      };
 
-        const rzp = new Razorpay(options);
-        rzp.on('payment.failed', function(resp){
-          errEl.style.display = '';
-          errEl.textContent = (resp && resp.error && resp.error.description) ? resp.error.description : "Payment failed or was cancelled.";
-          setLoading(false);
-        });
-
-        try { rzp.open(); } catch (e){
-          errEl.style.display = '';
-          errEl.textContent = "Could not open payment window.";
-          setLoading(false);
-        }
+      const rzp = new Razorpay(options);
+      rzp.on('payment.failed', (resp) => {
+        errorDiv.textContent = resp.error?.description || "Payment failed.";
+        payBtn.disabled = false;
       });
-    })();
+
+      rzp.open();
+    });
   </script>
 </body>
 </html>
