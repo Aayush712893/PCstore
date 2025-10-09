@@ -1377,6 +1377,17 @@ def clear_data():
         return "<h3>✅ All builds and billing (orders) data cleared successfully.</h3>"
     except Exception as e:
         return f"<h3>⚠️ Error clearing data: {e}</h3>"
+    
+@app.route("/admin/remove_test_product")
+def remove_test_product_route():
+    try:
+        with get_db() as conn:
+            c = conn.cursor()
+            c.execute("DELETE FROM products WHERE id = 9999 OR name LIKE '%Test Product%'")
+            conn.commit()
+        return "<h3>✅ Test product removed successfully.</h3>"
+    except Exception as e:
+        return f"<h3>⚠️ Error removing test product: {e}</h3>"
 
 @app.route("/logout")
 def logout():
