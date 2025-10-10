@@ -809,20 +809,21 @@ def api_remove_one_from_cart(pc_id):
 @app.route("/shipping", methods=["GET", "POST"])
 @login_required
 def shipping():
+    # If no cart, bounce to store
     if not session.get("cart"):
         return redirect(url_for("store"))
 
     error = None
     success_msg = None
 
-    # GET: show form and possibly a success message if payment was completed
+    # GET: show form and any success message (set by payment flow)
     if request.method == "GET":
-        # show success if session flag set
+        # If payment flow placed a flag in session, show success message once
         if session.pop("payment_success", False):
             success_msg = "Your payment was successful — thank you! We will dispatch your prebuilt PC in 10-15 working days."
         return render_template("shipping.html", error=error, success_msg=success_msg)
 
-    # POST: save shipping info and create lightweight order (payment will mark paid later)
+    # POST: validate and save shipping info, set shipping charge and create a lightweight order row
     name = request.form.get("name", "").strip()
     address = request.form.get("address", "").strip()
     phone = request.form.get("phone", "").strip()
@@ -831,61 +832,75 @@ def shipping():
         error = "Please fill out all fields."
         return render_template("shipping.html", error=error, success_msg=None)
 
+    # Save shipping details to session
     session["shipping"] = {"name": name, "address": address, "phone": phone}
 
-    # Insert lightweight order record (paid flag set later by payment verification)
+    # --- NEW: persist shipping charge so checkout & payment creation use same value ---
+    SHIPPING_CHARGE_DEFAULT = 500
+    session["shipping_charge"] = int(SHIPPING_CHARGE_DEFAULT)
+    # ------------------------------------------------------------------------------
+
+    # Insert a lightweight order row (paid=0). This gives us a DB record to attach Razorpay order id later.
     try:
         cart = session.get("cart", [])
-        total = sum(item.get("price", 0) for item in cart)
+        product_total = sum(item.get("price", 0) for item in cart)
+        total = product_total + int(session.get("shipping_charge", SHIPPING_CHARGE_DEFAULT))
+
         with get_db() as conn:
             c = conn.cursor()
-            # Ensure 'paid' column exists (safe to run multiple times)
-            try:
-                c.execute("ALTER TABLE orders ADD COLUMN paid INTEGER DEFAULT 0")
-            except sqlite3.OperationalError:
-                pass
+            # Ensure orders table has the extra columns (safe to run many times)
+            try: c.execute("ALTER TABLE orders ADD COLUMN razorpay_order_id TEXT")
+            except sqlite3.OperationalError: pass
+            try: c.execute("ALTER TABLE orders ADD COLUMN paid INTEGER DEFAULT 0")
+            except sqlite3.OperationalError: pass
 
+            # Insert lightweight order row
             c.execute("""
                 INSERT INTO orders (email, name, address, phone, items_json, total, paid)
                 VALUES (?, ?, ?, ?, ?, ?, 0)
-            """, (session.get("email"), name, address, phone, json.dumps(cart, ensure_ascii=False), total))
+            """, (
+                session.get("email"),
+                name,
+                address,
+                phone,
+                json.dumps(cart, ensure_ascii=False),
+                int(total)
+            ))
             conn.commit()
             order_id = c.lastrowid
             print("DEBUG: inserted lightweight order id:", order_id)
-            # Note: no WhatsApp notification here — removed per request
     except Exception as e:
         print("ERROR saving lightweight order:", e)
         traceback.print_exc()
 
+    # Redirect to checkout where payment will be initiated
     return redirect(url_for("checkout"))
 
 @app.post("/create_payment_order")
 @login_required
 def create_payment_order():
+    # Ensure Razorpay keys/client are configured
     if not _has_payment_keys() or rzp_client is None:
-        print("DEBUG create_payment_order -> missing RAZORPAY keys")
         return jsonify({"error": "Payment keys not configured"}), 400
 
-    # Compute amount from authoritative server-side session
-    cart = session.get("cart", []) or []
-    if not cart:
-        print("DEBUG create_payment_order -> empty cart in session")
-        return jsonify({"error": "Cart is empty"}), 400
+    # Compute amount server-side from cart + shipping_charge (do not trust client)
+    cart = session.get("cart", [])
+    product_total = sum(int(item.get("price", 0)) for item in cart)
+    shipping_charge = int(session.get("shipping_charge", 500))  # default to 500 if not set
+    rupees = product_total + shipping_charge
 
-    # shipping charge stored in session (if any), else 0
-        # inside create_payment_order() use:
-    shipping_charge = int(session.get("shipping_charge", 0) or 0)
-    product_total = sum(int(it.get("price", 0)) for it in cart)
-    rupees = int(product_total + shipping_charge)
-
-    print(f"DEBUG create_payment_order -> product_total: {product_total}, shipping: {shipping_charge}, rupees: {rupees}, cart_len: {len(cart)}")
+    # Debug logging
+    print("DEBUG create_payment_order -> computed product_total:", product_total,
+          "shipping:", shipping_charge, "rupees:", rupees, "cart_len:", len(cart))
 
     if rupees < 1:
-        return jsonify({"error": "Amount must be at least ₹1 (computed server-side)", "product_total": product_total, "shipping": shipping_charge}), 400
+        print("WARN create_payment_order -> computed amount < 1, refusing to create order")
+        return jsonify({"error": "Amount must be at least ₹1 (computed server-side)"}), 400
 
-    amount_paise = rupees * 100
+    amount_paise = int(rupees * 100)
 
     try:
+        # Create order on Razorpay
         order = rzp_client.order.create({
             "amount": amount_paise,
             "currency": "INR",
@@ -893,38 +908,51 @@ def create_payment_order():
             "payment_capture": 1
         })
         rzp_order_id = order.get("id")
-        print("DEBUG create_payment_order -> rzp_order_id:", rzp_order_id, "amount_paise:", amount_paise)
+        print("DEBUG create_payment_order -> rzp_order_id:", rzp_order_id, "amount:", amount_paise)
 
-        # Persist mapping: insert lightweight order row with razorpay_order_id (safe add columns)
+        # Persist mapping: attach razorpay_order_id to the most recent lightweight order for this user
         try:
             with get_db() as conn:
                 c = conn.cursor()
+                # ensure columns exist
                 try: c.execute("ALTER TABLE orders ADD COLUMN razorpay_order_id TEXT")
                 except sqlite3.OperationalError: pass
                 try: c.execute("ALTER TABLE orders ADD COLUMN paid INTEGER DEFAULT 0")
                 except sqlite3.OperationalError: pass
 
+                # Try to update the most recent order for this email that does not yet have a razorpay_order_id
                 c.execute("""
-                    INSERT INTO orders (email, name, address, phone, items_json, total, razorpay_order_id, paid)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, 0)
-                """, (
-                    session.get("email"),
-                    (session.get("shipping") or {}).get("name"),
-                    (session.get("shipping") or {}).get("address"),
-                    (session.get("shipping") or {}).get("phone"),
-                    json.dumps(cart, ensure_ascii=False),
-                    rupees,
-                    rzp_order_id
-                ))
+                    UPDATE orders
+                    SET razorpay_order_id = ?
+                    WHERE email = ? AND (razorpay_order_id IS NULL OR razorpay_order_id = '')
+                    ORDER BY id DESC
+                    LIMIT 1
+                """, (rzp_order_id, session.get("email")))
+                if c.rowcount == 0:
+                    # No existing lightweight order to attach — insert a new one with razorpay_order_id
+                    c.execute("""
+                        INSERT INTO orders (email, name, address, phone, items_json, total, razorpay_order_id, paid)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, 0)
+                    """, (
+                        session.get("email"),
+                        (session.get("shipping") or {}).get("name"),
+                        (session.get("shipping") or {}).get("address"),
+                        (session.get("shipping") or {}).get("phone"),
+                        json.dumps(cart, ensure_ascii=False),
+                        int(rupees),
+                        rzp_order_id
+                    ))
                 conn.commit()
-                print("DEBUG create_payment_order -> inserted internal order row for rzp_order_id:", rzp_order_id)
+                print("DEBUG: stored razorpay_order_id on latest order for", session.get("email"))
         except Exception as e:
-            print("WARN: failed to persist internal order row:", e)
+            print("WARN: could not store razorpay_order_id:", e)
+            traceback.print_exc()
 
+        # Return order details and public key id for frontend
         return jsonify({
             "ok": True,
-            "order": order,
-            "key_id": RAZORPAY_KEY_ID,
+            "order": order,               # return the raw Razorpay order object (id/amount/currency)
+            "key_id": RAZORPAY_KEY_ID,   # frontend needs public key
             "local_order_id": rzp_order_id
         }), 200
 
@@ -1276,34 +1304,62 @@ def cart():
 @app.route("/checkout")
 @login_required
 def checkout():
-    cart = session.get("cart", []) or []
-    shipping = session.get("shipping", {}) or {}
+    cart = session.get("cart", [])
+    # compute product total (sum of item prices)
+    product_total = sum(item.get("price", 0) for item in cart)
 
-    # product total (rupees)
-    product_total = 0
-    for it in cart:
-        try:
-            product_total += int(it.get("price", 0))
-        except Exception:
-            try:
-                product_total += int(float(it.get("price", 0)))
-            except Exception:
-                pass
+    # shipping - prefer session value (set in shipping POST), otherwise default to 500
+    shipping_charge = int(session.get("shipping_charge", 500))
 
-    # shipping charge pulled from session (set during shipping POST)
-    shipping_charge = int(session.get("shipping_charge", 0) or 0)
-
+    # grand total (what user must pay)
     total = product_total + shipping_charge
 
-    # Render checkout with breakdown so the template can show shipping, product cost and total
-    return render_template(
-        "checkout.html",
-        cart=cart,
-        shipping=shipping,
-        product_total=product_total,
-        shipping_charge=shipping_charge,
-        total=total
-    )
+    # Save order if we have shipping info (existing behavior) ...
+    shipping = session.get("shipping", {})
+
+    if cart and shipping:
+        with get_db() as conn:
+            c = conn.cursor()
+            # Count quantities per product id
+            counts = {}
+            for it in cart:
+                counts[it["id"]] = counts.get(it["id"], 0) + 1
+
+            # ensure stock and decrement (existing logic)...
+            for pid, qty in counts.items():
+                c.execute("SELECT stock FROM products WHERE id = ?", (pid,))
+                row = c.fetchone()
+                if not row:
+                    raise Exception(f"Product {pid} not found during checkout")
+                stock = row["stock"] if isinstance(row, sqlite3.Row) else row[0]
+                if stock < qty:
+                    raise Exception(f"Not enough stock for product id {pid} (have {stock}, need {qty})")
+
+            for pid, qty in counts.items():
+                c.execute("UPDATE products SET stock = stock - ? WHERE id = ?", (qty, pid))
+
+            # insert order record (store total as integer rupees sum INCLUDING shipping)
+            c.execute("""
+                INSERT INTO orders (email, name, address, phone, items_json, total)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (
+                session.get("email"),
+                shipping.get("name"),
+                shipping.get("address"),
+                shipping.get("phone"),
+                json.dumps(cart, ensure_ascii=False),
+                total
+            ))
+            conn.commit()
+
+    # Clear cart & shipping after checkout (your existing behavior)
+    session["cart"] = []
+    session.pop("shipping", None)
+    # optionally keep shipping_charge in session (or clear it)
+    session.pop("shipping_charge", None)
+
+    # render checkout template and pass computed breakdown
+    return render_template("checkout.html", total=total, product_total=product_total, shipping_charge=shipping_charge, cart=cart)
 
 @app.route("/submissions")
 @login_required
