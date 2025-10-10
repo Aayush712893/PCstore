@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block title %}Reset Password - Request OTP{% endblock %}
+{% block content %}
+  <h2>Reset password</h2>
+  {% if message %}<p style="color:green;">{{ message }}</p>{% endif %}
+  <form method="post">
+    <label>Email address</label><br>
+    <input type="email" name="email" required style="width:100%;padding:8px;margin:8px 0;"><br>
+    <button type="submit" class="btn">Send OTP</button>
+  </form>
+  <p style="margin-top:12px;"><a href="{{ url_for('login') }}">Back to login</a></p>
+{% endblock %}

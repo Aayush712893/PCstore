@@ -10,11 +10,14 @@ import json
 import razorpay
 from flask import jsonify
 from decimal import Decimal, ROUND_HALF_UP
-import socket, ssl, requests
+import socket, requests
 from requests.exceptions import ConnectionError as ReqConnError, ReadTimeout
 import time, traceback
-import smtplib
 from email.message import EmailMessage
+import secrets
+import hashlib
+from datetime import datetime, timedelta
+import smtplib, ssl, random
 
 # add near top of app.py
 SHIPPING_CHARGE_RUPEES = 500
@@ -29,6 +32,16 @@ DB_PATH = os.getenv("DB_PATH", "/var/data/pcstore.db")
 # --- Razorpay config (LIVE or TEST via environment) ---
 RAZORPAY_KEY_ID = os.getenv("RAZORPAY_KEY_ID")          # e.g. rzp_live_xxx or rzp_test_xxx
 RAZORPAY_KEY_SECRET = os.getenv("RAZORPAY_KEY_SECRET")  # the matching secret
+
+SMTP_HOST = os.getenv("SMTP_HOST", "")
+SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
+SMTP_USER = os.getenv("SMTP_USER", "")
+SMTP_PASS = os.getenv("SMTP_PASS", "")
+FROM_EMAIL = os.getenv("FROM_EMAIL", SMTP_USER)
+
+OTP_TTL_SECONDS = 10 * 60   # 10 minutes
+MAX_OTP_ATTEMPTS = 5
+RESEND_COOLDOWN_SECONDS = 60  # 1 minute between sends
 
 def _has_payment_keys():
     return bool(RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET)
@@ -63,6 +76,165 @@ def list_tables_and_db_path():
         c.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;")
         tables = [r[0] for r in c.fetchall()]
     return {"db_path": DB_PATH, "tables": tables}
+
+def ensure_users_reset_columns():
+    """Add columns for OTP reset if missing."""
+    with get_db() as conn:
+        c = conn.cursor()
+        c.execute("PRAGMA table_info(users);")
+        cols = {row[1] for row in c.fetchall()}
+        if "reset_otp_hash" not in cols:
+            c.execute("ALTER TABLE users ADD COLUMN reset_otp_hash TEXT;")
+        if "reset_otp_expiry" not in cols:
+            c.execute("ALTER TABLE users ADD COLUMN reset_otp_expiry INTEGER;")
+        if "reset_attempts" not in cols:
+            c.execute("ALTER TABLE users ADD COLUMN reset_attempts INTEGER DEFAULT 0;")
+        if "reset_sent_at" not in cols:
+            c.execute("ALTER TABLE users ADD COLUMN reset_sent_at INTEGER;")
+        conn.commit()
+
+def send_email_smtp(to_email: str, subject: str, body: str) -> bool:
+    """Send a simple text email using SMTP settings from environment."""
+    host = os.getenv("SMTP_HOST")
+    port = int(os.getenv("SMTP_PORT", "587"))
+    user = os.getenv("SMTP_USER")
+    password = os.getenv("SMTP_PASS")
+    from_addr = os.getenv("FROM_EMAIL", user)
+
+    if not (host and port and user and password):
+        print("WARN: SMTP not configured; cannot send email.")
+        return False
+
+    try:
+        msg = EmailMessage()
+        msg["From"] = from_addr
+        msg["To"] = to_email
+        msg["Subject"] = subject
+        msg.set_content(body)
+
+        context = ssl.create_default_context()
+        with smtplib.SMTP(host, port, timeout=20) as server:
+            server.ehlo()
+            if port == 587:
+                server.starttls(context=context)
+                server.ehlo()
+            server.login(user, password)
+            server.send_message(msg)
+        return True
+    except Exception as e:
+        print("ERROR sending email:", e)
+        return False
+
+def _hash_otp(otp: str) -> str:
+    """Return hex sha256 of OTP + salt (simple, but stored salt is server-side secret via SMTP_USER)."""
+    # Use SMTP_USER as server-side salt (not ideal for multi-server; better: app secret)
+    salt = (SMTP_USER or "") + app.secret_key
+    return hashlib.sha256((otp + salt).encode("utf-8")).hexdigest()
+
+def send_email(to_email: str, subject: str, body: str):
+    """Send a basic email using SMTP. Raises on failure."""
+    if not (SMTP_HOST and SMTP_USER and SMTP_PASS):
+        raise RuntimeError("SMTP configuration missing")
+    msg = EmailMessage()
+    msg["From"] = FROM_EMAIL
+    msg["To"] = to_email
+    msg["Subject"] = subject
+    msg.set_content(body)
+    # connect and send
+    with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=30) as s:
+        s.ehlo()
+        if SMTP_PORT == 587:
+            s.starttls()
+            s.ehlo()
+        s.login(SMTP_USER, SMTP_PASS)
+        s.send_message(msg)
+
+def _generate_otp(n=6):
+    return "".join(str(random.randint(0,9)) for _ in range(n))
+
+def generate_and_send_otp(email: str) -> tuple[bool, str]:
+    """Create OTP, store hashed version & expiry in DB, send email. Returns (ok, message)."""
+    # check user exists
+    with get_db() as conn:
+        c = conn.cursor()
+        c.execute("SELECT id, reset_sent_at FROM users WHERE email = ?", (email,))
+        row = c.fetchone()
+        if not row:
+            return False, "Email not registered."
+
+        uid = row["id"]
+        last_sent = row["reset_sent_at"] or 0
+        now_ts = int(time.time())
+        if last_sent and now_ts - int(last_sent) < RESEND_COOLDOWN_SECONDS:
+            return False, "Please wait before requesting a new OTP."
+
+        # generate 6-digit OTP
+        otp = f"{secrets.randbelow(10**6):06d}"
+        otp_hash = _hash_otp(otp)
+        expiry = int(time.time()) + OTP_TTL_SECONDS
+
+        # update DB
+        c.execute("""UPDATE users SET reset_otp_hash = ?, reset_otp_expiry = ?, reset_attempts = 0, reset_sent_at = ? WHERE id = ?""",
+                  (otp_hash, expiry, now_ts, uid))
+        conn.commit()
+
+    # email body (plain text)
+    subject = "Your OTP to reset password for Your PC"
+    body = f"""Hello,
+
+You (or someone using this email) requested a password reset for Your PC.
+
+Your OTP is: {otp}
+
+This code is valid for {OTP_TTL_SECONDS//60} minutes.
+If you did not request this, ignore this message.
+
+Thanks,
+Your PC Team
+"""
+    try:
+        send_email(email, subject, body)
+    except Exception as e:
+        # clear stored OTP if email sending failed
+        with get_db() as conn:
+            c = conn.cursor()
+            c.execute("UPDATE users SET reset_otp_hash = NULL, reset_otp_expiry = NULL, reset_attempts = 0 WHERE id = ?", (uid,))
+            conn.commit()
+        return False, f"Failed to send email: {e}"
+    return True, "OTP sent to your email."
+
+def verify_otp_for_email(email: str, otp: str) -> tuple[bool, str]:
+    """Return (True,msg) if OTP valid. Increases attempt counts and invalidates OTP after success or too many attempts."""
+    with get_db() as conn:
+        c = conn.cursor()
+        c.execute("SELECT id, reset_otp_hash, reset_otp_expiry, reset_attempts FROM users WHERE email = ?", (email,))
+        row = c.fetchone()
+        if not row:
+            return False, "Email not registered."
+        uid = row["id"]
+        otp_hash = row["reset_otp_hash"]
+        expiry = int(row["reset_otp_expiry"] or 0)
+        attempts = int(row["reset_attempts"] or 0)
+        now_ts = int(time.time())
+
+        if not otp_hash or not expiry or now_ts > expiry:
+            return False, "OTP expired or not requested. Please request a new OTP."
+
+        if attempts >= MAX_OTP_ATTEMPTS:
+            return False, "Too many failed attempts. Request a new OTP."
+
+        if _hash_otp(otp) == otp_hash:
+            # success: clear stored values (do not leave OTP lying around)
+            c.execute("UPDATE users SET reset_otp_hash = NULL, reset_otp_expiry = NULL, reset_attempts = 0 WHERE id = ?", (uid,))
+            conn.commit()
+            return True, "OTP verified."
+        else:
+            attempts += 1
+            c.execute("UPDATE users SET reset_attempts = ? WHERE id = ?", (attempts, uid))
+            conn.commit()
+            if attempts >= MAX_OTP_ATTEMPTS:
+                return False, "Too many failed attempts. Request a new OTP."
+            return False, "Invalid OTP. Please try again."
 
 # ---------- Create / migrate tables ----------
 def create_tables():
@@ -193,6 +365,7 @@ ensure_products_stock_column()
 migrate_builds_table()
 ensure_orders_payment_columns()
 add_test_product()
+ensure_users_reset_columns()
 
 # ---------- User management ----------
 def register_user(email, password):
@@ -1143,6 +1316,160 @@ def login():
             error = "Incorrect password. Please try again."
 
     return render_template("login.html", error=error)
+
+@app.route("/reset_password", methods=["GET", "POST"])
+def reset_password():
+    email_verified = session.get("pwd_reset_verified")
+    if not email_verified:
+        return redirect(url_for("forgot_password"))
+
+    error = None
+    success = False
+    if request.method == "POST":
+        pw1 = request.form.get("password", "")
+        pw2 = request.form.get("confirm_password", "")
+        if not pw1 or len(pw1) < 6:
+            error = "Please choose a password of at least 6 characters."
+            return render_template("reset_password.html", error=error)
+        if pw1 != pw2:
+            error = "Passwords do not match."
+            return render_template("reset_password.html", error=error)
+
+        # update DB
+        try:
+            with get_db() as conn:
+                c = conn.cursor()
+                c.execute("UPDATE users SET password_hash = ? WHERE email = ?",
+                          (generate_password_hash(pw1), email_verified))
+                conn.commit()
+            success = True
+            # cleanup
+            session.pop("pwd_reset_verified", None)
+            # optionally log user in
+            session["logged_in"] = True
+            session["email"] = email_verified
+            return render_template("reset_password.html", success=success)
+        except Exception as e:
+            print("ERROR updating password:", e)
+            error = "Could not update password. Try again later."
+
+    return render_template("reset_password.html", error=error)
+
+@app.route("/reset_verify", methods=["GET", "POST"])
+def reset_verify():
+    """User enters OTP they received."""
+    email = session.get("reset_email") or request.args.get("email") or ""
+    message = None
+    if request.method == "POST":
+        email = (request.form.get("email") or "").strip().lower()
+        otp = (request.form.get("otp") or "").strip()
+        ok, msg = verify_otp_for_email(email, otp)
+        message = msg
+        if ok:
+            # allow user to set password: mark in session that OTP passed for this email
+            session["reset_verified_email"] = email
+            return redirect(url_for("reset_set_password"))
+    return render_template("reset_verify.html", message=message, email=email)
+
+@app.route("/reset_set", methods=["GET", "POST"])
+def reset_set_password():
+    """Set a new password after OTP success."""
+    email = session.get("reset_verified_email")
+    if not email:
+        return redirect(url_for("reset_password"))
+
+    message = None
+    if request.method == "POST":
+        pw1 = request.form.get("password", "")
+        pw2 = request.form.get("password2", "")
+        if not pw1 or pw1 != pw2:
+            message = "Passwords do not match."
+            return render_template("reset_set.html", message=message)
+        # update password hash and clear reset fields
+        with get_db() as conn:
+            c = conn.cursor()
+            c.execute("UPDATE users SET password_hash = ?, reset_otp_hash = NULL, reset_otp_expiry = NULL, reset_attempts = 0 WHERE email = ?",
+                      (generate_password_hash(pw1), email))
+            conn.commit()
+        # clear session reset flags
+        session.pop("reset_verified_email", None)
+        session.pop("reset_email", None)
+        # optionally log user in immediately
+        session["logged_in"] = True
+        session["email"] = email
+        return redirect(url_for("home"))
+    return render_template("reset_set.html", message=message)
+
+@app.route("/forgot_password", methods=["GET", "POST"])
+def forgot_password():
+    error = None
+    sent = False
+    if request.method == "POST":
+        email = (request.form.get("email") or "").strip().lower()
+        if not email:
+            error = "Please enter your email."
+            return render_template("forgot_password.html", error=error, sent=sent)
+
+        # Verify user exists
+        with get_db() as conn:
+            c = conn.cursor()
+            c.execute("SELECT id, email FROM users WHERE email = ?", (email,))
+            user_row = c.fetchone()
+        if not user_row:
+            # do not reveal whether email exists; still show success to avoid user enumeration
+            print("INFO: forgot_password requested for unknown email", email)
+            sent = True
+            return render_template("forgot_password.html", error=None, sent=sent)
+
+        otp = _generate_otp(6)
+        expiry = datetime.utcnow() + timedelta(minutes=10)  # OTP valid 10 minutes
+        session['pwd_reset'] = {
+            "email": email,
+            "otp": otp,
+            "expires_at": expiry.isoformat()
+        }
+
+        # send email
+        subject = "Your password reset OTP"
+        body = f"Your password reset OTP is: {otp}\n\nThis code expires in 10 minutes. If you did not request this, ignore this email."
+        ok = send_email_smtp(email, subject, body)
+        if not ok:
+            error = "Could not send OTP email — check SMTP configuration."
+        else:
+            sent = True
+
+    return render_template("forgot_password.html", error=error, sent=sent)
+
+@app.route("/verify_otp", methods=["GET", "POST"])
+def verify_otp():
+    error = None
+    data = session.get("pwd_reset")
+    if not data:
+        return redirect(url_for("forgot_password"))
+
+    if request.method == "POST":
+        otp_entered = (request.form.get("otp") or "").strip()
+        # reload session data
+        data = session.get("pwd_reset")
+        if not data:
+            return redirect(url_for("forgot_password"))
+
+        expires_at = datetime.fromisoformat(data["expires_at"])
+        if datetime.utcnow() > expires_at:
+            session.pop("pwd_reset", None)
+            error = "OTP expired. Please request a new one."
+            return render_template("verify_otp.html", error=error)
+
+        if otp_entered == data.get("otp"):
+            # verified
+            session['pwd_reset_verified'] = data["email"]
+            # do not keep raw otp around
+            session.pop("pwd_reset", None)
+            return redirect(url_for("reset_password"))
+        else:
+            error = "Invalid OTP. Please try again."
+
+    return render_template("verify_otp.html", error=error)
 
 @app.route("/register", methods=["GET", "POST"])
 def register():
