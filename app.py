@@ -19,6 +19,7 @@ import hashlib
 from datetime import datetime, timedelta
 import smtplib, ssl, random
 from twilio.rest import Client as TwilioClient
+from twilio.rest import Client as TwilioRestClient
 
 # add near top of app.py
 SHIPPING_CHARGE_RUPEES = 500
@@ -47,8 +48,8 @@ RESEND_COOLDOWN_SECONDS = 60  # 1 minute between sends
 # Twilio WhatsApp notifier setup
 TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID")
 TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
-TWILIO_WHATSAPP_FROM = os.getenv("TWILIO_WHATSAPP_FROM")     # example: "whatsapp:+14155238886" (sandbox)
-ADMIN_WHATSAPP_TO = os.getenv("ADMIN_WHATSAPP_TO")           # example: "whatsapp:+9190xxxxxxx"
+TWILIO_WHATSAPP_FROM = os.getenv("TWILIO_WHATSAPP_FROM")   # e.g. "whatsapp:+14155238886"
+ADMIN_WHATSAPP_TO = os.getenv("ADMIN_WHATSAPP_TO")         # e.g. "whatsapp:+91XXXXXXXXXX"
 
 def _has_twilio_config():
     return bool(TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN and TWILIO_WHATSAPP_FROM and ADMIN_WHATSAPP_TO)
@@ -56,12 +57,19 @@ def _has_twilio_config():
 _twilio_client = None
 if _has_twilio_config():
     try:
-        _twilio_client = TwilioClient(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
-        print("Twilio client initialized, from:", TWILIO_WHATSAPP_FROM, "-> admin:", ADMIN_WHATSAPP_TO)
+        # create an *instance* of the Twilio client
+        _twilio_client = TwilioRestClient(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+        # sanity-check that we have the messages API available
+        if not hasattr(_twilio_client, "messages"):
+            print("WARN: Twilio client created but has no 'messages' attribute — wrong object type:", type(_twilio_client))
+            _twilio_client = None
+        else:
+            print("Twilio client initialized, from:", TWILIO_WHATSAPP_FROM, "-> admin:", ADMIN_WHATSAPP_TO)
     except Exception as e:
         print("ERROR initializing Twilio client:", e)
+        _twilio_client = None
 else:
-    print("Twilio config incomplete - WhatsApp notifications disabled.")
+    print("Twilio config incomplete - WhatsApp notifications disabled. Set TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_WHATSAPP_FROM, ADMIN_WHATSAPP_TO")
 
 def _has_payment_keys():
     return bool(RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET)
@@ -267,16 +275,21 @@ def _twilio_client():
     
 def send_whatsapp_notification_for_build(build: dict, user_email: str | None):
     """
-    Send a concise WhatsApp notification to the admin when a build is submitted.
-    build: dict containing build fields.
-    user_email: email of submitter (may be None).
+    Send WhatsApp notification to admin on build submission.
+    Returns True on successful API call (Twilio returned a SID), False otherwise.
     """
     if _twilio_client is None:
         print("Twilio client not configured; skipping WhatsApp send.")
         return False
 
+    # Ensure phone numbers start with 'whatsapp:' prefix required by Twilio WhatsApp API
+    from_num = TWILIO_WHATSAPP_FROM
+    to_num = ADMIN_WHATSAPP_TO
+    if not (str(from_num).startswith("whatsapp:") and str(to_num).startswith("whatsapp:")):
+        print("Twilio phone format error: ensure TWILIO_WHATSAPP_FROM and ADMIN_WHATSAPP_TO start with 'whatsapp:'")
+        return False
+
     try:
-        # Build a short message
         lines = [
             "New PC Build Submitted ✅",
             f"Email: {user_email or 'anonymous'}",
@@ -285,21 +298,19 @@ def send_whatsapp_notification_for_build(build: dict, user_email: str | None):
             f"Processor: {build.get('processor') or '-'}",
             f"Phone: {build.get('whatsapp') or '-'}",
         ]
-        # If comments exist, include truncated comments
         comments = (build.get('comments') or "").strip()
         if comments:
             if len(comments) > 200:
                 comments = comments[:197] + "..."
             lines.append(f"Comments: {comments}")
-
-        # Create the final message
         body = "\n".join(lines)
 
-        print("DEBUG: Sending WhatsApp to admin:", ADMIN_WHATSAPP_TO, "body:", body)
+        print("DEBUG: Sending WhatsApp to", to_num, "body:", body)
 
+        # actual send
         msg = _twilio_client.messages.create(
-            from_=TWILIO_WHATSAPP_FROM,
-            to=ADMIN_WHATSAPP_TO,
+            from_=from_num,
+            to=to_num,
             body=body
         )
         print("DEBUG: Twilio message SID:", getattr(msg, "sid", None))
@@ -506,6 +517,7 @@ def save_build_to_db(build, email):
         print("DEBUG: DB_PATH used by app:", DB_PATH)
         print("DEBUG: build payload:", build)
         print("DEBUG: email:", email)
+
         with get_db() as conn:
             c = conn.cursor()
             c.execute("""
@@ -530,16 +542,18 @@ def save_build_to_db(build, email):
             ))
             conn.commit()
             print("DEBUG: build inserted, lastrowid:", c.lastrowid)
+
+        # ✅ Send WhatsApp notification to admin (best-effort)
+        try:
+            print("DEBUG: Attempting to send WhatsApp notification via Twilio...")
+            sent = send_whatsapp_notification_for_build(build, email)
+            print("DEBUG: send_whatsapp_notification_for_build returned", sent)
+        except Exception as e:
+            print("WARN: send_whatsapp_notification_for_build raised:", e)
+
     except Exception as e:
         print("ERROR saving build:", e)
         traceback.print_exc()
-    # send WhatsApp notification (best-effort)
-    try:
-        sent = send_whatsapp_notification_for_build(build, email)
-        print("DEBUG: send_whatsapp_notification_for_build returned", sent)
-    except Exception as e:
-        print("WARN: send_whatsapp_notification_for_build raised:", e)
-
 
 def send_order_email(to_email: str, subject: str, body: str) -> bool:
     """
