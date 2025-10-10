@@ -18,6 +18,7 @@ import secrets
 import hashlib
 from datetime import datetime, timedelta
 import smtplib, ssl, random
+from twilio.rest import Client as TwilioClient
 
 # add near top of app.py
 SHIPPING_CHARGE_RUPEES = 500
@@ -42,6 +43,22 @@ FROM_EMAIL = os.getenv("FROM_EMAIL", SMTP_USER)
 OTP_TTL_SECONDS = 10 * 60   # 10 minutes
 MAX_OTP_ATTEMPTS = 5
 RESEND_COOLDOWN_SECONDS = 60  # 1 minute between sends
+
+# Twilio WhatsApp notifier setup
+TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID")
+TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
+TWILIO_WHATSAPP_FROM = os.getenv("TWILIO_WHATSAPP_FROM")  # e.g. "whatsapp:+14155238886"
+ADMIN_WHATSAPP_TO = os.getenv("ADMIN_WHATSAPP_TO")        # e.g. "whatsapp:+91XXXXXXXXXX"
+
+_twilio_client = None
+if TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN:
+    try:
+        _twilio_client = TwilioClient(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+        print("Twilio client initialized.")
+    except Exception as e:
+        print("Failed to init Twilio client:", e)
+else:
+    print("Twilio env vars missing; WhatsApp notifications disabled.")
 
 def _has_payment_keys():
     return bool(RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET)
@@ -235,6 +252,42 @@ def verify_otp_for_email(email: str, otp: str) -> tuple[bool, str]:
             if attempts >= MAX_OTP_ATTEMPTS:
                 return False, "Too many failed attempts. Request a new OTP."
             return False, "Invalid OTP. Please try again."
+        
+def _twilio_client():
+    if not (TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN):
+        return None
+    try:
+        return TwilioClient(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+    except Exception as e:
+        print("WARN: could not init Twilio client:", e)
+        return None
+
+def send_whatsapp_notification(body: str, to: str | None = None):
+    """
+    Send WhatsApp text message using Twilio.
+    - body: the text message content
+    - to: override the admin destination (must be 'whatsapp:+<countrycode><number>')
+    """
+    if _twilio_client is None:
+        print("WhatsApp notify skipped (Twilio client not configured). Body:", body)
+        return False
+
+    dest = to or ADMIN_WHATSAPP_TO
+    if not dest:
+        print("WhatsApp notify skipped (no ADMIN_WHATSAPP_TO). Body:", body)
+        return False
+
+    try:
+        msg = _twilio_client.messages.create(
+            body=body,
+            from_=TWILIO_WHATSAPP_FROM,
+            to=dest
+        )
+        print("WhatsApp notification sent, sid:", getattr(msg, "sid", None))
+        return True
+    except Exception as e:
+        print("Error sending WhatsApp notification:", e)
+        return False
 
 # ---------- Create / migrate tables ----------
 def create_tables():
@@ -434,6 +487,21 @@ def save_build_to_db(build, email):
     except Exception as e:
         print("ERROR saving build:", e)
         traceback.print_exc()
+    # notify admin via WhatsApp
+        try:
+            msg = (
+                f"📥 New Build Form submitted\n"
+                f"By: {email or 'guest'}\n"
+                f"Name: {build.get('customer_name')}\n"
+                f"Brand: {build.get('brand')}\n"
+                f"Processor: {build.get('processor')}\n"
+                f"Contact: {build.get('whatsapp')}\n"
+                f"Comments: {build.get('comments') or '-'}\n"
+                f"DB id: {c.lastrowid}"
+            )
+            send_whatsapp_notification(msg)
+        except Exception as e:
+            print("WARN: Failed to notify via WhatsApp about build:", e)
 
 def send_order_email(to_email: str, subject: str, body: str) -> bool:
     """
@@ -806,36 +874,49 @@ def api_remove_one_from_cart(pc_id):
     cart_total = sum(item.get("price", 0) for item in cart)
     return jsonify({"ok": True, "removed": removed, "cart_count": len(cart), "counts": counts, "cart_total": cart_total})
 
-@app.route("/shipping", methods=["GET", "POST"])
+@app.route("/shipping", methods=["GET","POST"])
 @login_required
 def shipping():
     if not session.get("cart"):
         return redirect(url_for("store"))
-
     error = None
     success_msg = None
-
-    if request.method == "POST":
-        name = request.form.get("name", "").strip()
-        address = request.form.get("address", "").strip()
-        phone = request.form.get("phone", "").strip()
-
-        if not name or not address or not phone:
-            error = "Please fill out all fields."
-            return render_template("shipping.html", error=error, success_msg=None)
-
-        # Save shipping info into session
-        session["shipping"] = {"name": name, "address": address, "phone": phone}
-
-        # Set the shipping charge (in rupees). You can change SHIPPING_CHARGE_RUPEES constant above.
-        session["shipping_charge"] = int(SHIPPING_CHARGE_RUPEES)
-
-        # Redirect to checkout page where the server will use session cart + shipping to build the order
-        return redirect(url_for("checkout"))
-
-    # GET: show form; optionally show success message if payment completed earlier
-    success_msg = session.pop("payment_success_message", None)
-    return render_template("shipping.html", error=error, success_msg=success_msg)
+    # if payment_success flag stored in session (you can set it in verify_payment/payment_success), show success
+    if request.method == "GET":
+        # show success if session flag set
+        if session.pop("payment_success", False):
+            success_msg = "Your payment was successful — thank you! We will dispatch your prebuilt PC in 10-15 working days."
+        return render_template("shipping.html", error=error, success_msg=success_msg)
+    # POST branch: save shipping info and create lightweight order (if you want)
+    name = request.form.get("name","").strip()
+    address = request.form.get("address","").strip()
+    phone = request.form.get("phone","").strip()
+    if not name or not address or not phone:
+        error = "Please fill out all fields."
+        return render_template("shipping.html", error=error, success_msg=None)
+    session["shipping"] = {"name": name, "address": address, "phone": phone}
+    # Insert order record (lightweight) - real payment will mark paid later
+    try:
+        cart = session.get("cart", [])
+        total = sum(item.get("price",0) for item in cart)
+        with get_db() as conn:
+            c = conn.cursor()
+            c.execute("""
+                INSERT INTO orders (email, name, address, phone, items_json, total, paid)
+                VALUES (?, ?, ?, ?, ?, ?, 0)
+            """, (session.get("email"), name, address, phone, json.dumps(cart), total))
+            conn.commit()
+            order_id = c.lastrowid
+            print("DEBUG: inserted lightweight order id:", order_id)
+            # notify admin about new order (not paid yet)
+            try:
+                msg = f"New order created (id={order_id}) by {session.get('email')}. Total: ₹{total}"
+                send_whatsapp_notification(msg)
+            except Exception as e:
+                print("WARN: WhatsApp notify failed for order creation:", e)
+    except Exception as e:
+        print("ERROR saving lightweight order:", e)
+    return redirect(url_for("checkout"))
 
 @app.post("/create_payment_order")
 @login_required
