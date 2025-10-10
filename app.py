@@ -42,7 +42,7 @@ FROM_EMAIL = os.getenv("FROM_EMAIL", SMTP_USER)
 # Admin notification recipients
 ADMIN_EMAILS = os.getenv(
     "ADMIN_EMAILS",
-    "aayushtiwaryap@gmail.com,aayushtiwaryag@gmail.com"
+    "aayushtiwaryap@gmail.com,aryantiwary807@gmail.com"
 ).split(",")
 
 OTP_TTL_SECONDS = 10 * 60   # 10 minutes
