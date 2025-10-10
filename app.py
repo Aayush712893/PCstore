@@ -273,52 +273,72 @@ def _twilio_client():
         print("WARN: could not init Twilio client:", e)
         return None
     
-def send_whatsapp_notification_for_build(build: dict, user_email: str | None):
+def _normalize_whatsapp_number(raw: str) -> str | None:
+    """Return 'whatsapp:+<digits>' or None if invalid."""
+    if not raw:
+        return None
+    raw = raw.strip()
+    # If already starts with whatsapp:, accept it (but ensure + present)
+    if raw.startswith("whatsapp:"):
+        num = raw[len("whatsapp:"):]
+        if not num.startswith("+"):
+            num = "+" + num
+        return "whatsapp:" + num.lstrip("+")
+    # If starts with +, add whatsapp:
+    if raw.startswith("+"):
+        return "whatsapp:" + raw
+    # If digits only, assume country code missing -> reject (require +)
+    return None
+    
+def send_whatsapp_notification_for_build(build: dict, user_email: str | None) -> bool:
     """
-    Send WhatsApp notification to admin on build submission.
-    Returns True on successful API call (Twilio returned a SID), False otherwise.
+    Send a WhatsApp message to ADMIN_WHATSAPP_TO notifying of a new build.
+    Returns True on success, False on failure (and logs details).
     """
-    if _twilio_client is None:
-        print("Twilio client not configured; skipping WhatsApp send.")
-        return False
-
-    # Ensure phone numbers start with 'whatsapp:' prefix required by Twilio WhatsApp API
-    from_num = TWILIO_WHATSAPP_FROM
-    to_num = ADMIN_WHATSAPP_TO
-    if not (str(from_num).startswith("whatsapp:") and str(to_num).startswith("whatsapp:")):
-        print("Twilio phone format error: ensure TWILIO_WHATSAPP_FROM and ADMIN_WHATSAPP_TO start with 'whatsapp:'")
-        return False
-
     try:
-        lines = [
+        TW_SID = os.getenv("TWILIO_ACCOUNT_SID")
+        TW_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
+        FROM_RAW = os.getenv("TWILIO_WHATSAPP_FROM")     # e.g. "whatsapp:+14155238886"
+        TO_RAW   = os.getenv("ADMIN_WHATSAPP_TO")        # e.g. "whatsapp:+9190xxxxxxxx"
+
+        if not (TW_SID and TW_TOKEN):
+            print("Twilio credentials missing; skipping WhatsApp send.")
+            return False
+
+        from_num = _normalize_whatsapp_number(FROM_RAW)
+        to_num   = _normalize_whatsapp_number(TO_RAW)
+
+        if not from_num or not to_num:
+            print("Twilio phone format error: ensure TWILIO_WHATSAPP_FROM and ADMIN_WHATSAPP_TO start with 'whatsapp:' and include country code (e.g. whatsapp:+9190...).")
+            return False
+
+        client = TwilioClient(TW_SID, TW_TOKEN)
+
+        body_lines = [
             "New PC Build Submitted ✅",
-            f"Email: {user_email or 'anonymous'}",
-            f"Name: {build.get('customer_name') or '-'}",
-            f"Brand: {build.get('brand') or '-'}",
-            f"Processor: {build.get('processor') or '-'}",
-            f"Phone: {build.get('whatsapp') or '-'}",
+            f"Email: {user_email or '(unknown)'}",
+            f"Name: {build.get('customer_name')}",
+            f"Brand: {build.get('brand')}",
+            f"Processor: {build.get('processor')}",
+            f"Phone: {build.get('whatsapp')}",
         ]
-        comments = (build.get('comments') or "").strip()
-        if comments:
-            if len(comments) > 200:
-                comments = comments[:197] + "..."
-            lines.append(f"Comments: {comments}")
-        body = "\n".join(lines)
+        body = "\n".join(body_lines)
 
-        print("DEBUG: Sending WhatsApp to", to_num, "body:", body)
-
-        # actual send
-        msg = _twilio_client.messages.create(
+        # Send message
+        msg = client.messages.create(
+            body=body,
             from_=from_num,
-            to=to_num,
-            body=body
+            to=to_num
         )
+
         print("DEBUG: Twilio message SID:", getattr(msg, "sid", None))
         return True
+
     except Exception as e:
         print("ERROR sending WhatsApp via Twilio:", e)
+        traceback.print_exc()
         return False
-
+    
 def send_whatsapp_notification(body: str, to: str | None = None):
     """
     Send WhatsApp text message using Twilio.
