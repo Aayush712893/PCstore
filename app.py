@@ -39,6 +39,12 @@ SMTP_USER = os.getenv("SMTP_USER", "")
 SMTP_PASS = os.getenv("SMTP_PASS", "")
 FROM_EMAIL = os.getenv("FROM_EMAIL", SMTP_USER)
 
+# Admin notification recipients
+ADMIN_EMAILS = os.getenv(
+    "ADMIN_EMAILS",
+    "aayushtiwaryap@gmail.com,aayushtiwaryag@gmail.com"
+).split(",")
+
 OTP_TTL_SECONDS = 10 * 60   # 10 minutes
 MAX_OTP_ATTEMPTS = 5
 RESEND_COOLDOWN_SECONDS = 60  # 1 minute between sends
@@ -236,6 +242,44 @@ def verify_otp_for_email(email: str, otp: str) -> tuple[bool, str]:
                 return False, "Too many failed attempts. Request a new OTP."
             return False, "Invalid OTP. Please try again."
         
+def send_admin_email(subject: str, body: str, to_list: list | None = None) -> bool:
+    """
+    Send a simple text email (no attachments) to the admin addresses.
+    Returns True on success, False on error.
+    """
+    to_list = to_list or ADMIN_EMAILS
+    if not SMTP_USER or not SMTP_PASS:
+        print("WARN: SMTP not configured (SMTP_USER or SMTP_PASS missing). Skipping admin email.")
+        return False
+
+    msg = EmailMessage()
+    msg["Subject"] = subject
+    msg["From"] = SMTP_USER
+    msg["To"] = ", ".join(to_list)
+    msg.set_content(body)
+
+    # Try SSL first (port 465), then try STARTTLS (port 587)
+    try:
+        if SMTP_PORT == 465:
+            context = ssl.create_default_context()
+            with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, context=context) as server:
+                server.login(SMTP_USER, SMTP_PASS)
+                server.send_message(msg)
+        else:
+            # use STARTTLS
+            with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
+                server.ehlo()
+                server.starttls(context=ssl.create_default_context())
+                server.ehlo()
+                server.login(SMTP_USER, SMTP_PASS)
+                server.send_message(msg)
+        print("DEBUG: admin email sent to:", to_list)
+        return True
+    except Exception as e:
+        print("ERROR sending admin email:", e)
+        traceback.print_exc()
+        return False
+        
 # ---------- Create / migrate tables ----------
 def create_tables():
     """Create core tables if missing: users, builds, orders, products (stock handled separately)."""
@@ -379,10 +423,6 @@ def validate_login(email, password):
 
 # ---------- Build saving ----------
 def save_build_to_db(build, email):
-    """
-    Save a user-submitted custom build into the 'builds' table.
-    This version does NOT perform any Twilio/WhatsApp notifications.
-    """
     try:
         print(f"DEBUG: save_build_to_db called at {time.strftime('%Y-%m-%d %H:%M:%S')}")
         print("DEBUG: DB_PATH used by app:", DB_PATH)
@@ -390,23 +430,6 @@ def save_build_to_db(build, email):
         print("DEBUG: email:", email)
         with get_db() as conn:
             c = conn.cursor()
-            # ensure table exists (safe to run repeatedly)
-            c.execute("""CREATE TABLE IF NOT EXISTS builds (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                email TEXT,
-                customer_name TEXT,
-                whatsapp TEXT,
-                comments TEXT,
-                brand TEXT,
-                processor TEXT,
-                motherboard TEXT,
-                ram TEXT,
-                ssd TEXT,
-                gpu TEXT,
-                psu TEXT,
-                cooling TEXT,
-                aio TEXT
-            )""")
             c.execute("""
                 INSERT INTO builds (
                     email, customer_name, whatsapp, comments,
@@ -428,9 +451,28 @@ def save_build_to_db(build, email):
                 build.get("aio"),
             ))
             conn.commit()
-            print("DEBUG: build inserted, lastrowid:", c.lastrowid)
+            last_id = c.lastrowid
+            print("DEBUG: build inserted, lastrowid:", last_id)
 
-        # No Twilio/WhatsApp notification in this version.
+        # Compose admin email body
+        email_user = email or "(not provided)"
+        lines = [
+            "New PC Build Submitted ✅",
+            "",
+            f"Submitted by: {email_user}",
+            "",
+            "Build details:",
+        ]
+        for k, v in build.items():
+            lines.append(f"{k}: {v}")
+        lines.append("")
+        lines.append(f"DB build id: {last_id}")
+        body = "\n".join(lines)
+
+        # Send to admins (non-blocking-ish; we log success/failure)
+        ok = send_admin_email(subject="New PC Build Submitted", body=body)
+        print("DEBUG: send_admin_email returned", ok)
+
     except Exception as e:
         print("ERROR saving build:", e)
         traceback.print_exc()
@@ -809,21 +851,21 @@ def api_remove_one_from_cart(pc_id):
 @app.route("/shipping", methods=["GET", "POST"])
 @login_required
 def shipping():
-    # If no cart, bounce to store
+    # If cart empty, send user to store
     if not session.get("cart"):
         return redirect(url_for("store"))
 
     error = None
     success_msg = None
 
-    # GET: show form and any success message (set by payment flow)
+    # GET: show form (and success message if payment completed)
     if request.method == "GET":
-        # If payment flow placed a flag in session, show success message once
+        # show success if session flag set (set this in verify/payment_success)
         if session.pop("payment_success", False):
             success_msg = "Your payment was successful — thank you! We will dispatch your prebuilt PC in 10-15 working days."
         return render_template("shipping.html", error=error, success_msg=success_msg)
 
-    # POST: validate and save shipping info, set shipping charge and create a lightweight order row
+    # POST: user submitted shipping form
     name = request.form.get("name", "").strip()
     address = request.form.get("address", "").strip()
     phone = request.form.get("phone", "").strip()
@@ -832,48 +874,83 @@ def shipping():
         error = "Please fill out all fields."
         return render_template("shipping.html", error=error, success_msg=None)
 
-    # Save shipping details to session
+    # Save shipping info into session so checkout/payment can use it
     session["shipping"] = {"name": name, "address": address, "phone": phone}
 
-    # --- NEW: persist shipping charge so checkout & payment creation use same value ---
-    SHIPPING_CHARGE_DEFAULT = 500
-    session["shipping_charge"] = int(SHIPPING_CHARGE_DEFAULT)
-    # ------------------------------------------------------------------------------
+    # Set shipping charge (₹500); store in session so create_payment_order can include it
+    shipping_charge = 500
+    session["shipping_charge"] = shipping_charge
 
-    # Insert a lightweight order row (paid=0). This gives us a DB record to attach Razorpay order id later.
+    # Insert lightweight order row (real payment will mark paid later)
     try:
         cart = session.get("cart", [])
         product_total = sum(item.get("price", 0) for item in cart)
-        total = product_total + int(session.get("shipping_charge", SHIPPING_CHARGE_DEFAULT))
+        total = product_total + shipping_charge
 
         with get_db() as conn:
             c = conn.cursor()
-            # Ensure orders table has the extra columns (safe to run many times)
-            try: c.execute("ALTER TABLE orders ADD COLUMN razorpay_order_id TEXT")
-            except sqlite3.OperationalError: pass
-            try: c.execute("ALTER TABLE orders ADD COLUMN paid INTEGER DEFAULT 0")
-            except sqlite3.OperationalError: pass
-
-            # Insert lightweight order row
+            # ensure orders table exists (safe to run multiple times)
             c.execute("""
-                INSERT INTO orders (email, name, address, phone, items_json, total, paid)
-                VALUES (?, ?, ?, ?, ?, ?, 0)
+                CREATE TABLE IF NOT EXISTS orders (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    email TEXT,
+                    name TEXT,
+                    address TEXT,
+                    phone TEXT,
+                    items_json TEXT,
+                    total INTEGER
+                )
+            """)
+            # Insert lightweight order (paid flag and razorpay columns may be added later by migrations)
+            c.execute("""
+                INSERT INTO orders (email, name, address, phone, items_json, total)
+                VALUES (?, ?, ?, ?, ?, ?)
             """, (
                 session.get("email"),
                 name,
                 address,
                 phone,
                 json.dumps(cart, ensure_ascii=False),
-                int(total)
+                total
             ))
+
+            # <-- YOUR SNIPPET STARTS HERE -->
             conn.commit()
             order_id = c.lastrowid
             print("DEBUG: inserted lightweight order id:", order_id)
+
+            # --- Send admin notification email about the order/shipping ---
+            try:
+                cart_snapshot = session.get("cart", [])
+                shipping_info = session.get("shipping", {})
+                lines = [
+                    "New Order (lightweight) created (not yet paid) ✅",
+                    "",
+                    f"DB order id: {order_id}",
+                    f"User email: {session.get('email')}",
+                    "",
+                    "Shipping details:",
+                    f"  Name: {shipping_info.get('name')}",
+                    f"  Address: {shipping_info.get('address')}",
+                    f"  Phone: {shipping_info.get('phone')}",
+                    "",
+                    "Cart items:",
+                ]
+                for it in cart_snapshot:
+                    lines.append(f"  - {it.get('name')} (id={it.get('id')}) — ₹{it.get('price')}")
+                lines.append("")
+                lines.append(f"Total (products + shipping): ₹{total}")
+                body = "\n".join(lines)
+                send_admin_email(subject=f"New order #{order_id} created", body=body)
+            except Exception as e:
+                print("WARN: admin email for order creation failed:", e)
+            # <-- YOUR SNIPPET ENDS HERE -->
+
     except Exception as e:
         print("ERROR saving lightweight order:", e)
         traceback.print_exc()
 
-    # Redirect to checkout where payment will be initiated
+    # Redirect to checkout where user can pay (create_payment_order will read session["shipping_charge"])
     return redirect(url_for("checkout"))
 
 @app.post("/create_payment_order")
