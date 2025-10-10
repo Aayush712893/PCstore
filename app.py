@@ -47,18 +47,21 @@ RESEND_COOLDOWN_SECONDS = 60  # 1 minute between sends
 # Twilio WhatsApp notifier setup
 TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID")
 TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
-TWILIO_WHATSAPP_FROM = os.getenv("TWILIO_WHATSAPP_FROM")  # e.g. "whatsapp:+14155238886"
-ADMIN_WHATSAPP_TO = os.getenv("ADMIN_WHATSAPP_TO")        # e.g. "whatsapp:+91XXXXXXXXXX"
+TWILIO_WHATSAPP_FROM = os.getenv("TWILIO_WHATSAPP_FROM")     # example: "whatsapp:+14155238886" (sandbox)
+ADMIN_WHATSAPP_TO = os.getenv("ADMIN_WHATSAPP_TO")           # example: "whatsapp:+9190xxxxxxx"
+
+def _has_twilio_config():
+    return bool(TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN and TWILIO_WHATSAPP_FROM and ADMIN_WHATSAPP_TO)
 
 _twilio_client = None
-if TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN:
+if _has_twilio_config():
     try:
         _twilio_client = TwilioClient(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
-        print("Twilio client initialized.")
+        print("Twilio client initialized, from:", TWILIO_WHATSAPP_FROM, "-> admin:", ADMIN_WHATSAPP_TO)
     except Exception as e:
-        print("Failed to init Twilio client:", e)
+        print("ERROR initializing Twilio client:", e)
 else:
-    print("Twilio env vars missing; WhatsApp notifications disabled.")
+    print("Twilio config incomplete - WhatsApp notifications disabled.")
 
 def _has_payment_keys():
     return bool(RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET)
@@ -261,6 +264,49 @@ def _twilio_client():
     except Exception as e:
         print("WARN: could not init Twilio client:", e)
         return None
+    
+def send_whatsapp_notification_for_build(build: dict, user_email: str | None):
+    """
+    Send a concise WhatsApp notification to the admin when a build is submitted.
+    build: dict containing build fields.
+    user_email: email of submitter (may be None).
+    """
+    if _twilio_client is None:
+        print("Twilio client not configured; skipping WhatsApp send.")
+        return False
+
+    try:
+        # Build a short message
+        lines = [
+            "New PC Build Submitted ✅",
+            f"Email: {user_email or 'anonymous'}",
+            f"Name: {build.get('customer_name') or '-'}",
+            f"Brand: {build.get('brand') or '-'}",
+            f"Processor: {build.get('processor') or '-'}",
+            f"Phone: {build.get('whatsapp') or '-'}",
+        ]
+        # If comments exist, include truncated comments
+        comments = (build.get('comments') or "").strip()
+        if comments:
+            if len(comments) > 200:
+                comments = comments[:197] + "..."
+            lines.append(f"Comments: {comments}")
+
+        # Create the final message
+        body = "\n".join(lines)
+
+        print("DEBUG: Sending WhatsApp to admin:", ADMIN_WHATSAPP_TO, "body:", body)
+
+        msg = _twilio_client.messages.create(
+            from_=TWILIO_WHATSAPP_FROM,
+            to=ADMIN_WHATSAPP_TO,
+            body=body
+        )
+        print("DEBUG: Twilio message SID:", getattr(msg, "sid", None))
+        return True
+    except Exception as e:
+        print("ERROR sending WhatsApp via Twilio:", e)
+        return False
 
 def send_whatsapp_notification(body: str, to: str | None = None):
     """
@@ -487,21 +533,13 @@ def save_build_to_db(build, email):
     except Exception as e:
         print("ERROR saving build:", e)
         traceback.print_exc()
-    # notify admin via WhatsApp
-        try:
-            msg = (
-                f"📥 New Build Form submitted\n"
-                f"By: {email or 'guest'}\n"
-                f"Name: {build.get('customer_name')}\n"
-                f"Brand: {build.get('brand')}\n"
-                f"Processor: {build.get('processor')}\n"
-                f"Contact: {build.get('whatsapp')}\n"
-                f"Comments: {build.get('comments') or '-'}\n"
-                f"DB id: {c.lastrowid}"
-            )
-            send_whatsapp_notification(msg)
-        except Exception as e:
-            print("WARN: Failed to notify via WhatsApp about build:", e)
+    # send WhatsApp notification (best-effort)
+    try:
+        sent = send_whatsapp_notification_for_build(build, email)
+        print("DEBUG: send_whatsapp_notification_for_build returned", sent)
+    except Exception as e:
+        print("WARN: send_whatsapp_notification_for_build raised:", e)
+
 
 def send_order_email(to_email: str, subject: str, body: str) -> bool:
     """
