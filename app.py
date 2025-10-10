@@ -18,8 +18,6 @@ import secrets
 import hashlib
 from datetime import datetime, timedelta
 import smtplib, ssl, random
-from twilio.rest import Client as TwilioClient
-from twilio.rest import Client as TwilioRestClient
 
 # add near top of app.py
 SHIPPING_CHARGE_RUPEES = 500
@@ -44,32 +42,6 @@ FROM_EMAIL = os.getenv("FROM_EMAIL", SMTP_USER)
 OTP_TTL_SECONDS = 10 * 60   # 10 minutes
 MAX_OTP_ATTEMPTS = 5
 RESEND_COOLDOWN_SECONDS = 60  # 1 minute between sends
-
-# Twilio WhatsApp notifier setup
-TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID")
-TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
-TWILIO_WHATSAPP_FROM = os.getenv("TWILIO_WHATSAPP_FROM")   # e.g. "whatsapp:+14155238886"
-ADMIN_WHATSAPP_TO = os.getenv("ADMIN_WHATSAPP_TO")         # e.g. "whatsapp:+91XXXXXXXXXX"
-
-def _has_twilio_config():
-    return bool(TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN and TWILIO_WHATSAPP_FROM and ADMIN_WHATSAPP_TO)
-
-_twilio_client = None
-if _has_twilio_config():
-    try:
-        # create an *instance* of the Twilio client
-        _twilio_client = TwilioRestClient(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
-        # sanity-check that we have the messages API available
-        if not hasattr(_twilio_client, "messages"):
-            print("WARN: Twilio client created but has no 'messages' attribute — wrong object type:", type(_twilio_client))
-            _twilio_client = None
-        else:
-            print("Twilio client initialized, from:", TWILIO_WHATSAPP_FROM, "-> admin:", ADMIN_WHATSAPP_TO)
-    except Exception as e:
-        print("ERROR initializing Twilio client:", e)
-        _twilio_client = None
-else:
-    print("Twilio config incomplete - WhatsApp notifications disabled. Set TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_WHATSAPP_FROM, ADMIN_WHATSAPP_TO")
 
 def _has_payment_keys():
     return bool(RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET)
@@ -264,108 +236,6 @@ def verify_otp_for_email(email: str, otp: str) -> tuple[bool, str]:
                 return False, "Too many failed attempts. Request a new OTP."
             return False, "Invalid OTP. Please try again."
         
-def _twilio_client():
-    if not (TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN):
-        return None
-    try:
-        return TwilioClient(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
-    except Exception as e:
-        print("WARN: could not init Twilio client:", e)
-        return None
-    
-def _normalize_whatsapp_number(raw: str) -> str | None:
-    """Return 'whatsapp:+<digits>' or None if invalid."""
-    if not raw:
-        return None
-    raw = raw.strip()
-    # If already starts with whatsapp:, accept it (but ensure + present)
-    if raw.startswith("whatsapp:"):
-        num = raw[len("whatsapp:"):]
-        if not num.startswith("+"):
-            num = "+" + num
-        return "whatsapp:" + num.lstrip("+")
-    # If starts with +, add whatsapp:
-    if raw.startswith("+"):
-        return "whatsapp:" + raw
-    # If digits only, assume country code missing -> reject (require +)
-    return None
-    
-def send_whatsapp_notification_for_build(build: dict, user_email: str | None) -> bool:
-    """
-    Send a WhatsApp message to ADMIN_WHATSAPP_TO notifying of a new build.
-    Returns True on success, False on failure (and logs details).
-    """
-    try:
-        TW_SID = os.getenv("TWILIO_ACCOUNT_SID")
-        TW_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
-        FROM_RAW = os.getenv("TWILIO_WHATSAPP_FROM")     # e.g. "whatsapp:+14155238886"
-        TO_RAW   = os.getenv("ADMIN_WHATSAPP_TO")        # e.g. "whatsapp:+9190xxxxxxxx"
-
-        if not (TW_SID and TW_TOKEN):
-            print("Twilio credentials missing; skipping WhatsApp send.")
-            return False
-
-        from_num = _normalize_whatsapp_number(FROM_RAW)
-        to_num   = _normalize_whatsapp_number(TO_RAW)
-
-        if not from_num or not to_num:
-            print("Twilio phone format error: ensure TWILIO_WHATSAPP_FROM and ADMIN_WHATSAPP_TO start with 'whatsapp:' and include country code (e.g. whatsapp:+9190...).")
-            return False
-
-        client = TwilioClient(TW_SID, TW_TOKEN)
-
-        body_lines = [
-            "New PC Build Submitted ✅",
-            f"Email: {user_email or '(unknown)'}",
-            f"Name: {build.get('customer_name')}",
-            f"Brand: {build.get('brand')}",
-            f"Processor: {build.get('processor')}",
-            f"Phone: {build.get('whatsapp')}",
-        ]
-        body = "\n".join(body_lines)
-
-        # Send message
-        msg = client.messages.create(
-            body=body,
-            from_=from_num,
-            to=to_num
-        )
-
-        print("DEBUG: Twilio message SID:", getattr(msg, "sid", None))
-        return True
-
-    except Exception as e:
-        print("ERROR sending WhatsApp via Twilio:", e)
-        traceback.print_exc()
-        return False
-    
-def send_whatsapp_notification(body: str, to: str | None = None):
-    """
-    Send WhatsApp text message using Twilio.
-    - body: the text message content
-    - to: override the admin destination (must be 'whatsapp:+<countrycode><number>')
-    """
-    if _twilio_client is None:
-        print("WhatsApp notify skipped (Twilio client not configured). Body:", body)
-        return False
-
-    dest = to or ADMIN_WHATSAPP_TO
-    if not dest:
-        print("WhatsApp notify skipped (no ADMIN_WHATSAPP_TO). Body:", body)
-        return False
-
-    try:
-        msg = _twilio_client.messages.create(
-            body=body,
-            from_=TWILIO_WHATSAPP_FROM,
-            to=dest
-        )
-        print("WhatsApp notification sent, sid:", getattr(msg, "sid", None))
-        return True
-    except Exception as e:
-        print("Error sending WhatsApp notification:", e)
-        return False
-
 # ---------- Create / migrate tables ----------
 def create_tables():
     """Create core tables if missing: users, builds, orders, products (stock handled separately)."""
@@ -449,28 +319,6 @@ def ensure_orders_payment_columns():
             c.execute("ALTER TABLE orders ADD COLUMN paid INTEGER DEFAULT 0")
         conn.commit()
 
-def add_test_product():
-    """Insert a test product (₹2) if it doesn't already exist."""
-    with get_db() as conn:
-        c = conn.cursor()
-        c.execute("SELECT id FROM products WHERE id = 9999")
-        if not c.fetchone():
-            c.execute("""
-                INSERT INTO products (id, name, price, image, specs_json, stock)
-                VALUES (?, ?, ?, ?, ?, ?)
-            """, (
-                9999,
-                "Test Product ₹2",
-                2,
-                "test.jpg",  # make a dummy image in static if you want
-                json.dumps(["This is a test product to check Razorpay"]),
-                10,  # stock = 10
-            ))
-            conn.commit()
-            print("✅ Test product (₹2) inserted.")
-        else:
-            print("ℹ️ Test product already exists.")
-
 def migrate_builds_table():
     """Add optional columns to builds if missing (safe to run multiple times)."""
     with get_db() as conn:
@@ -494,7 +342,6 @@ create_tables()
 ensure_products_stock_column()
 migrate_builds_table()
 ensure_orders_payment_columns()
-add_test_product()
 ensure_users_reset_columns()
 
 # ---------- User management ----------
@@ -532,14 +379,34 @@ def validate_login(email, password):
 
 # ---------- Build saving ----------
 def save_build_to_db(build, email):
+    """
+    Save a user-submitted custom build into the 'builds' table.
+    This version does NOT perform any Twilio/WhatsApp notifications.
+    """
     try:
         print(f"DEBUG: save_build_to_db called at {time.strftime('%Y-%m-%d %H:%M:%S')}")
         print("DEBUG: DB_PATH used by app:", DB_PATH)
         print("DEBUG: build payload:", build)
         print("DEBUG: email:", email)
-
         with get_db() as conn:
             c = conn.cursor()
+            # ensure table exists (safe to run repeatedly)
+            c.execute("""CREATE TABLE IF NOT EXISTS builds (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                email TEXT,
+                customer_name TEXT,
+                whatsapp TEXT,
+                comments TEXT,
+                brand TEXT,
+                processor TEXT,
+                motherboard TEXT,
+                ram TEXT,
+                ssd TEXT,
+                gpu TEXT,
+                psu TEXT,
+                cooling TEXT,
+                aio TEXT
+            )""")
             c.execute("""
                 INSERT INTO builds (
                     email, customer_name, whatsapp, comments,
@@ -563,14 +430,7 @@ def save_build_to_db(build, email):
             conn.commit()
             print("DEBUG: build inserted, lastrowid:", c.lastrowid)
 
-        # ✅ Send WhatsApp notification to admin (best-effort)
-        try:
-            print("DEBUG: Attempting to send WhatsApp notification via Twilio...")
-            sent = send_whatsapp_notification_for_build(build, email)
-            print("DEBUG: send_whatsapp_notification_for_build returned", sent)
-        except Exception as e:
-            print("WARN: send_whatsapp_notification_for_build raised:", e)
-
+        # No Twilio/WhatsApp notification in this version.
     except Exception as e:
         print("ERROR saving build:", e)
         traceback.print_exc()
@@ -946,48 +806,57 @@ def api_remove_one_from_cart(pc_id):
     cart_total = sum(item.get("price", 0) for item in cart)
     return jsonify({"ok": True, "removed": removed, "cart_count": len(cart), "counts": counts, "cart_total": cart_total})
 
-@app.route("/shipping", methods=["GET","POST"])
+@app.route("/shipping", methods=["GET", "POST"])
 @login_required
 def shipping():
     if not session.get("cart"):
         return redirect(url_for("store"))
+
     error = None
     success_msg = None
-    # if payment_success flag stored in session (you can set it in verify_payment/payment_success), show success
+
+    # GET: show form and possibly a success message if payment was completed
     if request.method == "GET":
         # show success if session flag set
         if session.pop("payment_success", False):
             success_msg = "Your payment was successful — thank you! We will dispatch your prebuilt PC in 10-15 working days."
         return render_template("shipping.html", error=error, success_msg=success_msg)
-    # POST branch: save shipping info and create lightweight order (if you want)
-    name = request.form.get("name","").strip()
-    address = request.form.get("address","").strip()
-    phone = request.form.get("phone","").strip()
+
+    # POST: save shipping info and create lightweight order (payment will mark paid later)
+    name = request.form.get("name", "").strip()
+    address = request.form.get("address", "").strip()
+    phone = request.form.get("phone", "").strip()
+
     if not name or not address or not phone:
         error = "Please fill out all fields."
         return render_template("shipping.html", error=error, success_msg=None)
+
     session["shipping"] = {"name": name, "address": address, "phone": phone}
-    # Insert order record (lightweight) - real payment will mark paid later
+
+    # Insert lightweight order record (paid flag set later by payment verification)
     try:
         cart = session.get("cart", [])
-        total = sum(item.get("price",0) for item in cart)
+        total = sum(item.get("price", 0) for item in cart)
         with get_db() as conn:
             c = conn.cursor()
+            # Ensure 'paid' column exists (safe to run multiple times)
+            try:
+                c.execute("ALTER TABLE orders ADD COLUMN paid INTEGER DEFAULT 0")
+            except sqlite3.OperationalError:
+                pass
+
             c.execute("""
                 INSERT INTO orders (email, name, address, phone, items_json, total, paid)
                 VALUES (?, ?, ?, ?, ?, ?, 0)
-            """, (session.get("email"), name, address, phone, json.dumps(cart), total))
+            """, (session.get("email"), name, address, phone, json.dumps(cart, ensure_ascii=False), total))
             conn.commit()
             order_id = c.lastrowid
             print("DEBUG: inserted lightweight order id:", order_id)
-            # notify admin about new order (not paid yet)
-            try:
-                msg = f"New order created (id={order_id}) by {session.get('email')}. Total: ₹{total}"
-                send_whatsapp_notification(msg)
-            except Exception as e:
-                print("WARN: WhatsApp notify failed for order creation:", e)
+            # Note: no WhatsApp notification here — removed per request
     except Exception as e:
         print("ERROR saving lightweight order:", e)
+        traceback.print_exc()
+
     return redirect(url_for("checkout"))
 
 @app.post("/create_payment_order")
