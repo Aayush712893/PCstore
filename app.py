@@ -42,7 +42,7 @@ FROM_EMAIL = os.getenv("FROM_EMAIL", SMTP_USER)
 # Admin notification recipients
 ADMIN_EMAILS = os.getenv(
     "ADMIN_EMAILS",
-    "aayushtiwaryap@gmail.com,aayushtiwaryag@gmail.com"
+    "aayushtiwaryap@gmail.com,aryantiwary807@gmail.com"
 ).split(",")
 
 OTP_TTL_SECONDS = 10 * 60   # 10 minutes
@@ -381,12 +381,33 @@ def migrate_builds_table():
         if to_add:
             conn.commit()
 
+def add_new_product():
+    with get_db() as conn:
+        c = conn.cursor()
+        c.execute("SELECT id FROM products WHERE name = ?", ("New Product",))
+        if not c.fetchone():
+            c.execute("""
+                INSERT INTO products (name, price, image, specs_json, stock)
+                VALUES (?, ?, ?, ?, ?)
+            """, (
+                "New Product",
+                2500,
+                "new_product.jpg",  # add image later or keep blank
+                json.dumps(["New product added manually"]),
+                10  # stock
+            ))
+            conn.commit()
+            print("✅ New Product added successfully")
+        else:
+            print("ℹ️ New Product already exists")
+
 # Run schema creation / migration at startup
 create_tables()
 ensure_products_stock_column()
 migrate_builds_table()
 ensure_orders_payment_columns()
 ensure_users_reset_columns()
+add_new_product()
 
 # ---------- User management ----------
 def register_user(email, password):
