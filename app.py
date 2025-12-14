@@ -977,86 +977,52 @@ def shipping():
 @app.post("/create_payment_order")
 @login_required
 def create_payment_order():
-    # Ensure Razorpay keys/client are configured
     if not _has_payment_keys() or rzp_client is None:
         return jsonify({"error": "Payment keys not configured"}), 400
 
-    # Compute amount server-side from cart + shipping_charge (do not trust client)
+    # --- Compute totals ONLY from server data ---
     cart = session.get("cart", [])
+    if not cart:
+        print("WARN create_payment_order -> cart empty")
+        return jsonify({"error": "Cart is empty"}), 400
+
     product_total = sum(int(item.get("price", 0)) for item in cart)
-    shipping_charge = int(session.get("shipping_charge", 500))  # default to 500 if not set
+    shipping_charge = int(session.get("shipping_charge", 0))
     rupees = product_total + shipping_charge
 
-    # Debug logging
-    print("DEBUG create_payment_order -> computed product_total:", product_total,
-          "shipping:", shipping_charge, "rupees:", rupees, "cart_len:", len(cart))
+    print(
+        f"DEBUG create_payment_order -> product_total={product_total}, "
+        f"shipping={shipping_charge}, total_rupees={rupees}"
+    )
 
     if rupees < 1:
-        print("WARN create_payment_order -> computed amount < 1, refusing to create order")
-        return jsonify({"error": "Amount must be at least ₹1 (computed server-side)"}), 400
+        return jsonify({"error": "Amount must be at least ₹1"}), 400
 
-    amount_paise = int(rupees * 100)
+    amount_paise = rupees * 100
 
     try:
-        # Create order on Razorpay
         order = rzp_client.order.create({
             "amount": amount_paise,
             "currency": "INR",
             "receipt": f"rcpt_{int(time.time())}",
             "payment_capture": 1
         })
-        rzp_order_id = order.get("id")
-        print("DEBUG create_payment_order -> rzp_order_id:", rzp_order_id, "amount:", amount_paise)
 
-        # Persist mapping: attach razorpay_order_id to the most recent lightweight order for this user
-        try:
-            with get_db() as conn:
-                c = conn.cursor()
-                # ensure columns exist
-                try: c.execute("ALTER TABLE orders ADD COLUMN razorpay_order_id TEXT")
-                except sqlite3.OperationalError: pass
-                try: c.execute("ALTER TABLE orders ADD COLUMN paid INTEGER DEFAULT 0")
-                except sqlite3.OperationalError: pass
+        print(
+            "DEBUG create_payment_order -> rzp_order_id:",
+            order["id"],
+            "amount_paise:",
+            amount_paise
+        )
 
-                # Try to update the most recent order for this email that does not yet have a razorpay_order_id
-                c.execute("""
-                    UPDATE orders
-                    SET razorpay_order_id = ?
-                    WHERE email = ? AND (razorpay_order_id IS NULL OR razorpay_order_id = '')
-                    ORDER BY id DESC
-                    LIMIT 1
-                """, (rzp_order_id, session.get("email")))
-                if c.rowcount == 0:
-                    # No existing lightweight order to attach — insert a new one with razorpay_order_id
-                    c.execute("""
-                        INSERT INTO orders (email, name, address, phone, items_json, total, razorpay_order_id, paid)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, 0)
-                    """, (
-                        session.get("email"),
-                        (session.get("shipping") or {}).get("name"),
-                        (session.get("shipping") or {}).get("address"),
-                        (session.get("shipping") or {}).get("phone"),
-                        json.dumps(cart, ensure_ascii=False),
-                        int(rupees),
-                        rzp_order_id
-                    ))
-                conn.commit()
-                print("DEBUG: stored razorpay_order_id on latest order for", session.get("email"))
-        except Exception as e:
-            print("WARN: could not store razorpay_order_id:", e)
-            traceback.print_exc()
-
-        # Return order details and public key id for frontend
         return jsonify({
             "ok": True,
-            "order": order,               # return the raw Razorpay order object (id/amount/currency)
-            "key_id": RAZORPAY_KEY_ID,   # frontend needs public key
-            "local_order_id": rzp_order_id
-        }), 200
+            "order": order,
+            "key_id": RAZORPAY_KEY_ID
+        })
 
     except Exception as e:
         print("ERROR creating Razorpay order:", e)
-        traceback.print_exc()
         return jsonify({"error": "Could not create payment order"}), 400
             
 # Verify payment signature called by client after checkout
